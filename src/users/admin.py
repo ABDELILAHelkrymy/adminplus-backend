@@ -1,7 +1,6 @@
 from django.contrib import admin
-from .models import User, Role, UserRole, Setting
+from .models import User
 from django.contrib.auth.admin import UserAdmin
-from django import forms
 # Register your models here.
 
 class CustomUserAdmin(UserAdmin):
@@ -40,7 +39,3 @@ class CustomUserAdmin(UserAdmin):
         return super().formfield_for_dbfield(db_field, **kwargs)
 
 admin.site.register(User, CustomUserAdmin)
-
-admin.site.register(Role)
-admin.site.register(UserRole)
-admin.site.register(Setting)
