@@ -33,6 +33,10 @@ ALLOWED_HOSTS = [
     'adminplus-backend-production.up.railway.app'
 ]
 
+CSRF_TRUSTED_ORIGINS = [
+    'https://adminplus-backend-production.up.railway.app/'
+]
+
 
 # Application definition
 
