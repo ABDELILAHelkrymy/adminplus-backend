@@ -101,13 +101,19 @@ class UserRegistrationView(generics.CreateAPIView):
 @swagger_auto_schema(tags=['Users'])
 class UserViewSet(viewsets.ModelViewSet):
     serializer_class = UserSerializer
-    
+
     def get_queryset(self):
+        # Handle schema generation for Swagger
+        if getattr(self, 'swagger_fake_view', False):
+            return User.objects.none()
+
         user = self.request.user
         
-        if not user.role:
+        # Safely check if the user has a role
+        if not getattr(user, 'role', None):
             return User.objects.none()
         
+        # Filter users based on user role
         if user.role.name == 'admin':
             return User.objects.all()
         elif user.role.name == 'accountant':
@@ -131,7 +137,6 @@ class UserViewSet(viewsets.ModelViewSet):
         else:
             permission_classes = [permissions.IsAuthenticated]
         return [permission() for permission in permission_classes]
-
 
 class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
     serializer_class = AccountantClientRelationshipSerializer
