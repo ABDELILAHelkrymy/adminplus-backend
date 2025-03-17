@@ -108,7 +108,6 @@ class UserProfile(models.Model):
     CURRENCY_CHOICES = [
         ('USD', 'US Dollar'),
         ('EUR', 'Euro'),
-        ('GBP', 'British Pound'),
         ('MAD', 'Moroccan Dirham'),
     ]
     currency = models.CharField(max_length=3, choices=CURRENCY_CHOICES, default='USD')
@@ -133,24 +132,3 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.action} on {self.model}"
-    
-@receiver(post_save)
-def log_save(sender, instance, created, **kwargs):
-    action = 'create' if created else 'update'
-    AuditLog.objects.create(
-        user=instance.last_modified_by if hasattr(instance, 'last_modified_by') else None,
-        action=action,
-        model=sender.__name__,
-        object_id=instance.id,
-        details=instance.__dict__
-    )
-
-@receiver(post_delete)
-def log_delete(sender, instance, **kwargs):
-    AuditLog.objects.create(
-        user=instance.last_modified_by if hasattr(instance, 'last_modified_by') else None,
-        action='delete',
-        model=sender.__name__,
-        object_id=instance.id,
-        details=instance.__dict__
-    )
