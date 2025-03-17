@@ -15,20 +15,24 @@ from .serializers import LoginSerializer, TokenSerializer, TokenRefreshSerialize
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
+class RoleNames:
+    ADMIN = 'admin'
+    ACCOUNTANT = 'accountant'
+    CLIENT = 'client'
 
 class IsAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == 'admin'
+        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == RoleNames.ADMIN
 
 
 class IsAccountant(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == 'accountant'
+        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == RoleNames.ACCOUNTANT
 
 
 class IsClient(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == 'client'
+        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == RoleNames.CLIENT
 
 
 class RoleViewSet(viewsets.ReadOnlyModelViewSet):
@@ -69,7 +73,7 @@ class LoginView(generics.GenericAPIView):
 class CustomTokenRefreshView(TokenRefreshView):
     serializer_class = TokenRefreshSerializer
     
-    def post(self, request, *args, **kwargs):
+    def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -83,7 +87,17 @@ class CustomTokenRefreshView(TokenRefreshView):
 class UserRegistrationView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = UserRegistrationSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [IsAdmin | IsAccountant]
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        if self.request.user.role.name == RoleNames.ACCOUNTANT:
+            # Automatically associate the client with the accountant
+            AccountantClientRelationship.objects.create(
+                accountant=self.request.user,
+                client=user,
+                status='pending'
+            )
 
     @swagger_auto_schema(
         operation_description="Register a new user",
@@ -114,20 +128,29 @@ class UserViewSet(viewsets.ModelViewSet):
             return User.objects.none()
         
         # Filter users based on user role
-        if user.role.name == 'admin':
+        if user.role.name == RoleNames.ACCOUNTANT:
+            return User.objects.filter(
+                Q(id=user.id) | Q(accountantclientrelationship__accountant=user, accountantclientrelationship__status='active'))
+        elif user.role.name == RoleNames.CLIENT:
+            return User.objects.filter(
+            Q(id=user.id) | Q(accountantclientrelationship__client=user, accountantclientrelationship__status='active'))
+        else:
             return User.objects.all()
-        elif user.role.name == 'accountant':
-            # Accountants can see themselves and their clients
-            client_ids = AccountantClientRelationship.objects.filter(
-                accountant=user, status='active'
-            ).values_list('client_id', flat=True)
-            return User.objects.filter(Q(id=user.id) | Q(id__in=client_ids))
-        else:  # client
-            # Clients can see themselves and their accountants
-            accountant_ids = AccountantClientRelationship.objects.filter(
-                client=user, status='active'
-            ).values_list('accountant_id', flat=True)
-            return User.objects.filter(Q(id=user.id) | Q(id__in=accountant_ids))
+        # # Filter users based on user role
+        # if user.role.name == RoleNames.ADMIN:
+        #     return User.objects.all()
+        # elif user.role.name == 'accountant':
+        #     # Accountants can see themselves and their clients
+        #     client_ids = AccountantClientRelationship.objects.filter(
+        #         accountant=user, status='active'
+        #     ).values_list('client_id', flat=True)
+        #     return User.objects.filter(Q(id=user.id) | Q(id__in=client_ids))
+        # else:  # client
+        #     # Clients can see themselves and their accountants
+        #     accountant_ids = AccountantClientRelationship.objects.filter(
+        #         client=user, status='active'
+        #     ).values_list('accountant_id', flat=True)
+        #     return User.objects.filter(Q(id=user.id) | Q(id__in=accountant_ids))
     
     def get_permissions(self):
         if self.action == 'create':
@@ -202,14 +225,26 @@ class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
         tags=['Client-Accountant Relationships']
     )
     @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'])
     def accept(self, request, pk=None):
         relationship = self.get_object()
         
         # Only clients can accept invitations from accountants
         if not request.user.role or request.user.role.name != 'client' or request.user.id != relationship.client.id:
             return Response({"detail": "Only clients can accept accountant invitations"},
-                          status=status.HTTP_403_FORBIDDEN)
+                        status=status.HTTP_403_FORBIDDEN)
         
+        # Check if the relationship is already active
+        if relationship.status == 'active':
+            return Response({"detail": "This relationship is already active."},
+                        status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if the relationship is in a valid state to be accepted
+        if relationship.status != 'pending':
+            return Response({"detail": "Only pending relationships can be accepted."},
+                        status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update the relationship status to 'active'
         relationship.status = 'active'
         relationship.save()
         
@@ -225,14 +260,26 @@ class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
         tags=['Client-Accountant Relationships']
     )
     @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         relationship = self.get_object()
         
         # Only clients can reject invitations from accountants
         if not request.user.role or request.user.role.name != 'client' or request.user.id != relationship.client.id:
             return Response({"detail": "Only clients can reject accountant invitations"},
-                          status=status.HTTP_403_FORBIDDEN)
+                        status=status.HTTP_403_FORBIDDEN)
         
+        # Check if the relationship is already rejected
+        if relationship.status == 'rejected':
+            return Response({"detail": "This relationship is already rejected."},
+                        status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if the relationship is in a valid state to be rejected
+        if relationship.status != 'pending':
+            return Response({"detail": "Only pending relationships can be rejected."},
+                        status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update the relationship status to 'rejected'
         relationship.status = 'rejected'
         relationship.save()
         
@@ -248,19 +295,31 @@ class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
         tags=['Client-Accountant Relationships']
     )
     @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'])
     def set_primary(self, request, pk=None):
         relationship = self.get_object()
         
         # Only clients can set primary accountants
         if not request.user.role or request.user.role.name != 'client' or request.user.id != relationship.client.id:
             return Response({"detail": "Only clients can set their primary accountant"},
-                          status=status.HTTP_403_FORBIDDEN)
+                        status=status.HTTP_403_FORBIDDEN)
+        
+        # Check if the relationship is already primary
+        if relationship.is_primary:
+            return Response({"detail": "This accountant is already your primary accountant."},
+                        status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if the relationship is active
+        if relationship.status != 'active':
+            return Response({"detail": "Only active relationships can be set as primary."},
+                        status=status.HTTP_400_BAD_REQUEST)
         
         # Clear other primary relationships
         AccountantClientRelationship.objects.filter(
             client=relationship.client, is_primary=True
         ).update(is_primary=False)
         
+        # Set the current relationship as primary
         relationship.is_primary = True
         relationship.save()
         

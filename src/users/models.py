@@ -42,7 +42,7 @@ class Role(models.Model):
 class User(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)    
     username = None  # Remove username field
-    email = models.EmailField(_('email address'), unique=True)
+    email = models.EmailField(_('email address'), unique=True, db_index=True)
     
     role = models.ForeignKey(Role, on_delete=models.SET_NULL, null=True, related_name='users')
     
@@ -55,6 +55,7 @@ class User(AbstractUser):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, related_name='created_users')
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name']
@@ -69,8 +70,8 @@ class User(AbstractUser):
 #  ACCOUNTANT-CLIENT RELATIONSHIP
 # --------------------------
 class AccountantClientRelationship(models.Model):
-    accountant = models.ForeignKey(User, on_delete=models.CASCADE, related_name='clients')
-    client = models.ForeignKey(User, on_delete=models.CASCADE, related_name='accountants')
+    accountant = models.ForeignKey(User, on_delete=models.CASCADE, related_name='clients', db_index=True)
+    client = models.ForeignKey(User, on_delete=models.CASCADE, related_name='accountants', db_index=True)
 
     is_primary = models.BooleanField(default=False)  # Only one primary accountant per client
 
@@ -83,6 +84,7 @@ class AccountantClientRelationship(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='created_relationships')
 
     class Meta:
         unique_together = ('accountant', 'client')

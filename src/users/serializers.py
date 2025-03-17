@@ -4,7 +4,12 @@ from .models import User, Role, AccountantClientRelationship, UserProfile
 from django.db import transaction
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth.password_validation import validate_password
 
+class RoleNames:
+    ADMIN = 'admin'
+    ACCOUNTANT = 'accountant'
+    CLIENT = 'client'
 
 class RoleSerializer(serializers.ModelSerializer):
     class Meta:
@@ -59,9 +64,12 @@ class UserSerializer(serializers.ModelSerializer):
                   'profile', 'created_at')
         read_only_fields = ('id', 'is_verified', 'created_at')
 
+def validate_password(self, value):
+    validate_password(value)
+    return value
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True, validators=[validate_password])
     confirm_password = serializers.CharField(write_only=True)
     profile = UserProfileSerializer(required=False)
     accountant_email = serializers.EmailField(required=False, write_only=True)
@@ -75,7 +83,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     
     def validate(self, data):
         if data['password'] != data.pop('confirm_password'):
-            raise serializers.ValidationError("Passwords do not match")
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
         
         # Get role by name
         role_name = data.pop('role_name')
@@ -83,15 +91,15 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             role = Role.objects.get(name=role_name)
             data['role'] = role
         except Role.DoesNotExist:
-            raise serializers.ValidationError(f"Role '{role_name}' does not exist")
+            raise serializers.ValidationError({"role_name": f"Role '{role_name}' does not exist"})
         
         # Check if accountant exists when a client registers with accountant email
-        if role.name == 'client' and 'accountant_email' in data and data['accountant_email']:
+        if role.name == RoleNames.CLIENT and 'accountant_email' in data and data['accountant_email']:
             try:
-                accountant_role = Role.objects.get(name='accountant')
+                accountant_role = Role.objects.get(name=RoleNames.ACCOUNTANT)
                 accountant = User.objects.get(email=data['accountant_email'], role=accountant_role)
             except (User.DoesNotExist, Role.DoesNotExist):
-                raise serializers.ValidationError("Accountant with this email does not exist")
+                raise serializers.ValidationError({"accountant_email": "Accountant with this email does not exist"})
         
         return data
     
@@ -108,13 +116,11 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         
         if profile_data:
             UserProfile.objects.create(user=user, **profile_data)
-        else:
-            UserProfile.objects.create(user=user)
         
         # If client is registering and provided accountant email, create relationship
-        if user.role and user.role.name == 'client' and accountant_email:
+        if user.role and user.role.name == RoleNames.CLIENT and accountant_email:
             try:
-                accountant_role = Role.objects.get(name='accountant')
+                accountant_role = Role.objects.get(name=RoleNames.ACCOUNTANT)
                 accountant = User.objects.get(email=accountant_email, role=accountant_role)
                 AccountantClientRelationship.objects.create(
                     accountant=accountant,
@@ -126,8 +132,64 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         
         return user
 
-
 class AccountantClientRelationshipSerializer(serializers.ModelSerializer):
+    client_email = serializers.EmailField(write_only=True, required=False)
+    client = UserSerializer(read_only=True)
+    accountant = UserSerializer(read_only=True)
+    
+    class Meta:
+        model = AccountantClientRelationship
+        fields = ('id', 'accountant', 'client', 'client_email', 'is_primary', 'status', 'created_at')
+        read_only_fields = ('id', 'created_at')
+    
+    def validate(self, data):
+        client_email = data.get('client_email')
+        accountant = self.context['request'].user
+        
+        if not accountant.role or accountant.role.name != RoleNames.ACCOUNTANT:
+            raise serializers.ValidationError({"accountant": "Only accountants can create relationships"})
+        
+        try:
+            client_role = Role.objects.get(name=RoleNames.CLIENT)
+            client = User.objects.get(email=client_email, role=client_role)
+        except (User.DoesNotExist, Role.DoesNotExist):
+            raise serializers.ValidationError({"client_email": "Client with this email does not exist"})
+        
+        if client.id == accountant.id:
+            raise serializers.ValidationError({"client_email": "An accountant cannot create a relationship with themselves"})
+        
+        return data
+    
+    def create(self, validated_data):
+        client_email = validated_data.pop('client_email')
+        accountant = self.context['request'].user
+        
+        try:
+            client_role = Role.objects.get(name=RoleNames.CLIENT)
+            client = User.objects.get(email=client_email, role=client_role)
+        except (User.DoesNotExist, Role.DoesNotExist):
+            raise serializers.ValidationError({"client_email": "Client with this email does not exist"})
+        
+        # Check if relationship already exists
+        existing = AccountantClientRelationship.objects.filter(accountant=accountant, client=client).first()
+        if existing:
+            if existing.status == 'rejected':
+                existing.status = 'pending'
+                existing.save()
+                return existing
+            return existing
+        
+        # If this is marked as primary, clear other primary relationships
+        if validated_data.get('is_primary', False):
+            AccountantClientRelationship.objects.filter(client=client, is_primary=True).update(is_primary=False)
+        
+        relationship = AccountantClientRelationship.objects.create(
+            accountant=accountant,
+            client=client,
+            **validated_data
+        )
+        
+        return relationship
     client_email = serializers.EmailField(write_only=True, required=False)
     client = UserSerializer(read_only=True)
     accountant = UserSerializer(read_only=True)
