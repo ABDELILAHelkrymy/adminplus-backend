@@ -213,3 +213,5 @@ SWAGGER_SETTINGS = {
     'JSON_EDITOR': True,
     'VALIDATOR_URL': None,
 }
+
+STATIC_URL = '/static/'
