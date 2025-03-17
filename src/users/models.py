@@ -40,8 +40,7 @@ class Role(models.Model):
 #  USER MODEL
 # --------------------------
 class User(AbstractUser):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)    
     username = None  # Remove username field
     email = models.EmailField(_('email address'), unique=True)
     
