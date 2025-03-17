@@ -133,38 +133,43 @@ class UserViewSet(viewsets.ModelViewSet):
         return [permission() for permission in permission_classes]
 
 
-
 class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
     serializer_class = AccountantClientRelationshipSerializer
 
     """
-        API endpoints for managing accountant-client relationships.
-        
-        list:
-        Return a list of all relationships visible to the authenticated user.
-        
-        create:
-        Create a new relationship. Only accountants can create relationships.
-        
-        retrieve:
-        Return the details of a specific relationship.
-        
-        update:
-        Update all fields of a relationship. Only accountants and admins can update.
-        
-        partial_update:
-        Update some fields of a relationship. Only accountants and admins can update.
-        
-        destroy:
-        Delete a relationship. Only admins can delete relationships.
+    API endpoints for managing accountant-client relationships.
+    
+    list:
+    Return a list of all relationships visible to the authenticated user.
+    
+    create:
+    Create a new relationship. Only accountants can create relationships.
+    
+    retrieve:
+    Return the details of a specific relationship.
+    
+    update:
+    Update all fields of a relationship. Only accountants and admins can update.
+    
+    partial_update:
+    Update some fields of a relationship. Only accountants and admins can update.
+    
+    destroy:
+    Delete a relationship. Only admins can delete relationships.
     """
 
     def get_queryset(self):
+        # Handle schema generation for Swagger
+        if getattr(self, 'swagger_fake_view', False):
+            return AccountantClientRelationship.objects.none()
+
         user = self.request.user
         
-        if not user.role:
+        # Safely check if the user has a role
+        if not getattr(user, 'role', None):
             return AccountantClientRelationship.objects.none()
         
+        # Filter relationships based on user role
         if user.role.name == 'admin':
             return AccountantClientRelationship.objects.all()
         elif user.role.name == 'accountant':
@@ -192,8 +197,6 @@ class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
         tags=['Client-Accountant Relationships']
     )
     @action(detail=True, methods=['post'])
-    
-    @action(detail=True, methods=['post'])
     def accept(self, request, pk=None):
         relationship = self.get_object()
         
@@ -208,6 +211,14 @@ class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(relationship)
         return Response(serializer.data)
     
+    @swagger_auto_schema(
+        operation_description="Reject an accountant invitation. Only clients can reject invitations.",
+        responses={
+            200: AccountantClientRelationshipSerializer,
+            403: "Forbidden - Not authorized to reject this invitation"
+        },
+        tags=['Client-Accountant Relationships']
+    )
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         relationship = self.get_object()
@@ -223,6 +234,14 @@ class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(relationship)
         return Response(serializer.data)
     
+    @swagger_auto_schema(
+        operation_description="Set a primary accountant. Only clients can set their primary accountant.",
+        responses={
+            200: AccountantClientRelationshipSerializer,
+            403: "Forbidden - Not authorized to set primary accountant"
+        },
+        tags=['Client-Accountant Relationships']
+    )
     @action(detail=True, methods=['post'])
     def set_primary(self, request, pk=None):
         relationship = self.get_object()
