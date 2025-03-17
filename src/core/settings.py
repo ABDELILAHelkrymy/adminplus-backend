@@ -38,6 +38,11 @@ CSRF_TRUSTED_ORIGINS = [
     'https://adminplus-backend-production.up.railway.app/'
 ]
 
+CORS_ALLOWED_ORIGINS = [
+    'https://adminplus-backend-production.up.railway.app',
+    'http://localhost:3000'
+]
+
 
 # Application definition
 
@@ -53,6 +58,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'drf_yasg',
+    'corsheaders',
 
     # Local apps
     'users',
@@ -106,6 +112,7 @@ SIMPLE_JWT = {
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
