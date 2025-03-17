@@ -13,6 +13,7 @@ schema_view = get_schema_view(
       terms_of_service="https://www.yourapp.com/terms/",
       contact=openapi.Contact(email="contact@yourapp.com"),
       license=openapi.License(name="Your License"),
+      url='https://adminplus-backend-production.up.railway.app', # This is the URL of your deployed
    ),
    public=True,
    permission_classes=(permissions.AllowAny,),
