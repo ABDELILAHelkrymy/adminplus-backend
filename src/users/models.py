@@ -2,6 +2,8 @@ import uuid
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.utils.translation import gettext_lazy as _
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 
 
 
@@ -120,3 +122,35 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"Profile for {self.user.email}"
+    
+class AuditLog(models.Model):
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    action = models.CharField(max_length=100)
+    model = models.CharField(max_length=100)
+    object_id = models.CharField(max_length=100)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    details = models.JSONField()
+
+    def __str__(self):
+        return f"{self.user.email} - {self.action} on {self.model}"
+    
+@receiver(post_save)
+def log_save(sender, instance, created, **kwargs):
+    action = 'create' if created else 'update'
+    AuditLog.objects.create(
+        user=instance.last_modified_by if hasattr(instance, 'last_modified_by') else None,
+        action=action,
+        model=sender.__name__,
+        object_id=instance.id,
+        details=instance.__dict__
+    )
+
+@receiver(post_delete)
+def log_delete(sender, instance, **kwargs):
+    AuditLog.objects.create(
+        user=instance.last_modified_by if hasattr(instance, 'last_modified_by') else None,
+        action='delete',
+        model=sender.__name__,
+        object_id=instance.id,
+        details=instance.__dict__
+    )
