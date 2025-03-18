@@ -122,6 +122,10 @@ class UserProfile(models.Model):
     def __str__(self):
         return f"Profile for {self.user.email}"
     
+
+# --------------------------
+#  AUDIT LOG
+# --------------------------
 class AuditLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     action = models.CharField(max_length=100)

@@ -1,1 +1,1 @@
-from .signals import log_save, log_delete
+default_app_config = 'users.apps.UsersConfig'
