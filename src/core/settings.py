@@ -31,7 +31,8 @@ DEBUG = config('DJANGO_DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    'adminplus-backend-production.up.railway.app'
+    'adminplus-backend-production.up.railway.app',
+    'http://localhost:3000'
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -152,6 +153,8 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+
+is_local = config('IS_LOCAL', default=False, cast=bool)
 
 CONN_MAX_AGE = config('CONN_MAX_AGE', default=600, cast=int)
 DATABASES_URL = config('DATABASE_URL',cast=str)

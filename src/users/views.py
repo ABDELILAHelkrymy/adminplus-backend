@@ -5,12 +5,13 @@ from rest_framework.decorators import action
 from django.db.models import Q
 from .models import User, Role, AccountantClientRelationship
 from .serializers import (
-    UserSerializer, UserRegistrationSerializer, AccountantClientRelationshipSerializer,
+    UserSerializer, AccountantClientRelationshipSerializer,
     RoleSerializer
 )
+from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from .serializers import LoginSerializer, TokenSerializer, TokenRefreshSerializer
+from .serializers import LoginSerializer, TokenSerializer, TokenRefreshSerializer, ClientProfileUpdateSerializer, UserClientRegistrationSerializer
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -53,6 +54,7 @@ class LoginView(generics.GenericAPIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request, *args, **kwargs):
+        print(request.data)
         """
         Log in with email and password to receive JWT tokens.
         """
@@ -84,82 +86,127 @@ class CustomTokenRefreshView(TokenRefreshView):
             'refresh': str(refresh)
         })
     
-class UserRegistrationView(generics.CreateAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserRegistrationSerializer
-    permission_classes = [IsAdmin | IsAccountant]
+# class UserRegistrationView(generics.CreateAPIView):
+#     queryset = User.objects.all()
+#     serializer_class = UserRegistrationSerializer
+#     permission_classes = [IsAdmin | IsAccountant]
 
-    def perform_create(self, serializer):
-        user = serializer.save()
-        if self.request.user.role.name == RoleNames.ACCOUNTANT:
-            # Automatically associate the client with the accountant
-            AccountantClientRelationship.objects.create(
-                accountant=self.request.user,
-                client=user,
-                status='pending'
-            )
+#     def perform_create(self, serializer):
+#         user = serializer.save()
+#         if self.request.user.role.name == RoleNames.ACCOUNTANT:
+#             # Automatically associate the client with the accountant
+#             AccountantClientRelationship.objects.create(
+#                 accountant=self.request.user,
+#                 client=user,
+#                 status='pending'
+#             )
 
-    @swagger_auto_schema(
-        operation_description="Register a new user",
-        responses={
-            201: UserSerializer,
-            400: "Bad Request - Invalid data"
-        },
-        security=[],
-        tags=['Authentication']
-    )
-    def post(self, request, *args, **kwargs):
-        return super().post(request, *args, **kwargs)
+#     @swagger_auto_schema(
+#         operation_description="Register a new user",
+#         responses={
+#             201: UserSerializer,
+#             400: "Bad Request - Invalid data"
+#         },
+#         security=[],
+#         tags=['Authentication']
+#     )
+#     def post(self, request, *args, **kwargs):
+#         return super().post(request, *args, **kwargs)
 
 
+# --------------------------
+#  USER REGISTRATION VIEWSET
+# --------------------------
 @swagger_auto_schema(tags=['Users'])
 class UserViewSet(viewsets.ModelViewSet):
-    serializer_class = UserSerializer
+    queryset = User.objects.all()
+    serializer_class = UserClientRegistrationSerializer
+    http_method_names = ['post']
 
-    def get_queryset(self):
-        # Handle schema generation for Swagger
-        if getattr(self, 'swagger_fake_view', False):
-            return User.objects.none()
+    @action(detail=False, methods=['post'], url_path='register')
+    def register(self, request):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response({"message": "User registered successfully."}, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        user = self.request.user
+# @swagger_auto_schema(tags=['Users'])
+# class UserViewSet(viewsets.ModelViewSet):
+#     serializer_class = UserSerializer
+
+#     def get_queryset(self):
+#         # Handle schema generation for Swagger
+#         if getattr(self, 'swagger_fake_view', False):
+#             return User.objects.none()
+
+#         user = self.request.user
         
-        # Safely check if the user has a role
-        if not getattr(user, 'role', None):
-            return User.objects.none()
+#         # Safely check if the user has a role
+#         if not getattr(user, 'role', None):
+#             return User.objects.none()
         
-        # Filter users based on user role
-        if user.role.name == RoleNames.ACCOUNTANT:
-            return User.objects.filter(
-                Q(id=user.id) | Q(accountantclientrelationship__accountant=user, accountantclientrelationship__status='active'))
-        elif user.role.name == RoleNames.CLIENT:
-            return User.objects.filter(
-            Q(id=user.id) | Q(accountantclientrelationship__client=user, accountantclientrelationship__status='active'))
-        else:
-            return User.objects.all()
-        # # Filter users based on user role
-        # if user.role.name == RoleNames.ADMIN:
-        #     return User.objects.all()
-        # elif user.role.name == 'accountant':
-        #     # Accountants can see themselves and their clients
-        #     client_ids = AccountantClientRelationship.objects.filter(
-        #         accountant=user, status='active'
-        #     ).values_list('client_id', flat=True)
-        #     return User.objects.filter(Q(id=user.id) | Q(id__in=client_ids))
-        # else:  # client
-        #     # Clients can see themselves and their accountants
-        #     accountant_ids = AccountantClientRelationship.objects.filter(
-        #         client=user, status='active'
-        #     ).values_list('accountant_id', flat=True)
-        #     return User.objects.filter(Q(id=user.id) | Q(id__in=accountant_ids))
+#         # Filter users based on user role
+#         if user.role.name == RoleNames.ACCOUNTANT:
+#             return User.objects.filter(
+#                 Q(id=user.id) | Q(accountantclientrelationship__accountant=user, accountantclientrelationship__status='active'))
+#         elif user.role.name == RoleNames.CLIENT:
+#             return User.objects.filter(
+#             Q(id=user.id) | Q(accountantclientrelationship__client=user, accountantclientrelationship__status='active'))
+#         else:
+#             return User.objects.all()
+
     
-    def get_permissions(self):
-        if self.action == 'create':
-            permission_classes = [IsAdmin | IsAccountant]
-        elif self.action in ['update', 'partial_update', 'destroy']:
-            permission_classes = [IsAdmin]
-        else:
-            permission_classes = [permissions.IsAuthenticated]
-        return [permission() for permission in permission_classes]
+#     def get_permissions(self):
+#         if self.action == 'create':
+#             permission_classes = [IsAdmin | IsAccountant]
+#         elif self.action in ['update', 'partial_update', 'destroy']:
+#             permission_classes = [IsAdmin]
+#         else:
+#             permission_classes = [permissions.IsAuthenticated]
+#         return [permission() for permission in permission_classes]
+
+
+# --------------------------
+#  CLIENT PROFILE UPDATE VIEW
+# --------------------------
+@swagger_auto_schema(tags=['Users'])
+class ClientProfileUpdateView(generics.UpdateAPIView):
+    serializer_class = ClientProfileUpdateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user.profile
+    
+
+# --------------------------
+#  ACCOUNTANT-CLIENT RELATIONSHIP VIEWSET
+# --------------------------
+@swagger_auto_schema(tags=['Client-Accountant Relationships'])
+class AccountantClientRelationshipViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        """List pending client requests for the logged-in accountant."""
+        requests = AccountantClientRelationship.objects.filter(accountant=request.user, status='pending')
+        serializer = AccountantClientRelationshipSerializer(requests, many=True)
+        return Response(serializer.data)
+
+    def update(self, request, pk=None):
+        """Accept or reject a client request."""
+        try:
+            relationship = AccountantClientRelationship.objects.get(id=pk, accountant=request.user, status='pending')
+        except AccountantClientRelationship.DoesNotExist:
+            return Response({"error": "Request not found or already processed"}, status=status.HTTP_404_NOT_FOUND)
+
+        action = request.data.get('action')
+        if action not in ['accept', 'reject']:
+            return Response({"error": "Invalid action"}, status=status.HTTP_400_BAD_REQUEST)
+
+        relationship.status = 'active' if action == 'accept' else 'rejected'
+        relationship.save()
+        return Response({"message": f"Request {action}ed successfully"})
+    
 
 class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
     serializer_class = AccountantClientRelationshipSerializer

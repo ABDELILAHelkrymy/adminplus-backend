@@ -68,69 +68,60 @@ def validate_password(self, value):
     validate_password(value)
     return value
 
-class UserRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-    confirm_password = serializers.CharField(write_only=True)
-    profile = UserProfileSerializer(required=False)
-    accountant_email = serializers.EmailField(required=False, write_only=True)
-    role_name = serializers.CharField(write_only=True)
-    
+# --------------------------
+#  USER REGISTRATION SERIALIZER
+# --------------------------
+class UserClientRegistrationSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=8)
+    confirm_password = serializers.CharField(write_only=True, min_length=8)
+
     class Meta:
         model = User
-        fields = ('email', 'password', 'confirm_password', 'first_name', 'last_name', 
-                  'role_name', 'phone_number', 'address', 'company_name', 'profile', 
-                  'accountant_email')
-    
+        fields = ['email', 'first_name', 'last_name', 'password', 'confirm_password', 'phone_number', 'address', 'company_name']
+
     def validate(self, data):
-        if data['password'] != data.pop('confirm_password'):
-            raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
-        
-        # Get role by name
-        role_name = data.pop('role_name')
-        try:
-            role = Role.objects.get(name=role_name)
-            data['role'] = role
-        except Role.DoesNotExist:
-            raise serializers.ValidationError({"role_name": f"Role '{role_name}' does not exist"})
-        
-        # Check if accountant exists when a client registers with accountant email
-        if role.name == RoleNames.CLIENT and 'accountant_email' in data and data['accountant_email']:
-            try:
-                accountant_role = Role.objects.get(name=RoleNames.ACCOUNTANT)
-                accountant = User.objects.get(email=data['accountant_email'], role=accountant_role)
-            except (User.DoesNotExist, Role.DoesNotExist):
-                raise serializers.ValidationError({"accountant_email": "Accountant with this email does not exist"})
-        
+        if data['password'] != data['confirm_password']:
+            raise serializers.ValidationError({"password": "Passwords must match."})
         return data
-    
+
     @transaction.atomic
     def create(self, validated_data):
-        accountant_email = validated_data.pop('accountant_email', None)
-        profile_data = validated_data.pop('profile', None)
-        
-        user = User.objects.create_user(
-            email=validated_data['email'],
-            password=validated_data['password'],
-            **{k: v for k, v in validated_data.items() if k != 'password'}
-        )
-        
-        if profile_data:
-            UserProfile.objects.create(user=user, **profile_data)
-        
-        # If client is registering and provided accountant email, create relationship
-        if user.role and user.role.name == RoleNames.CLIENT and accountant_email:
-            try:
-                accountant_role = Role.objects.get(name=RoleNames.ACCOUNTANT)
-                accountant = User.objects.get(email=accountant_email, role=accountant_role)
-                AccountantClientRelationship.objects.create(
-                    accountant=accountant,
-                    client=user,
-                    status='pending'
-                )
-            except (User.DoesNotExist, Role.DoesNotExist):
-                pass  # This was validated earlier
-        
+        role = Role.objects.get(name=RoleNames.CLIENT)
+        validated_data.pop('confirm_password')  # Remove confirm_password before saving
+        user = User.objects.create_user(role=role, **validated_data)
         return user
+
+
+class ClientProfileUpdateSerializer(serializers.ModelSerializer):
+    accountant_email = serializers.EmailField(write_only=True, required=False)
+
+    class Meta:
+        model = UserProfile
+        fields = ['profile_picture', 'tax_number', 'business_type', 'currency', 'language', 'accountant_email']
+
+    def update(self, instance, validated_data):
+        accountant_email = validated_data.pop('accountant_email', None)
+        user = instance.user  # The client user
+
+        # Update profile fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        # If the client provided an accountant email, create a relationship request
+        if accountant_email:
+            try:
+                accountant = User.objects.get(email=accountant_email)
+                AccountantClientRelationship.objects.get_or_create(
+                    accountant=accountant, 
+                    client=user,
+                    defaults={'status': 'pending'}
+                )
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"accountant_email": "No accountant found with this email."})
+
+        return instance
+
 
 class AccountantClientRelationshipSerializer(serializers.ModelSerializer):
     client_email = serializers.EmailField(write_only=True, required=False)
