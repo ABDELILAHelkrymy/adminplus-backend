@@ -3,74 +3,28 @@ from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Q
-from .models import User, Role, AccountantClientRelationship, UserProfile
+from .models import User, Role
 from .serializers import (
-    UserSerializer, AccountantClientRelationshipSerializer,
     RoleSerializer
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from .serializers import LoginSerializer, TokenSerializer, TokenRefreshSerializer, ClientProfileUpdateSerializer, UserClientRegistrationSerializer
+from .serializers import LoginSerializer, TokenSerializer, TokenRefreshSerializer, UserSerializer, AdminRegistrationSerializer, ExternalAccountantRegistrationSerializer, AccountSettingsSerializer
+from django.contrib.auth import login
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
+
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-class RoleNames:
-    ADMIN = 'admin'
-    ACCOUNTANT = 'accountant'
-    CLIENT = 'client'
-
-class IsAdmin(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == RoleNames.ADMIN
-
-
-class IsAccountant(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == RoleNames.ACCOUNTANT
-
-
-class IsClient(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role and request.user.role.name == RoleNames.CLIENT
-
-
+@swagger_auto_schema(tags=['Roles'])
 class RoleViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Role.objects.all()
     serializer_class = RoleSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-@swagger_auto_schema(tags=['Authentication'])
-class LoginView(generics.GenericAPIView):
-    """
-    Authenticate a user and obtain JWT token.
-    
-    Returns user details and JWT tokens for authentication.
-    Access token should be included in the Authorization header as 'Bearer <token>'
-    for subsequent requests.
-    """
-    serializer_class = LoginSerializer
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request, *args, **kwargs):
-        print(request.data)
-        """
-        Log in with email and password to receive JWT tokens.
-        """
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data['user']
-        
-        refresh = RefreshToken.for_user(user)
-        
-        return Response({
-            'user': UserSerializer(user).data,
-            'tokens': {
-                'access': str(refresh.access_token),
-                'refresh': str(refresh)
-            }
-        })
 @swagger_auto_schema(tags=['Authentication'])
 class CustomTokenRefreshView(TokenRefreshView):
     serializer_class = TokenRefreshSerializer
@@ -85,251 +39,201 @@ class CustomTokenRefreshView(TokenRefreshView):
             'access': str(refresh.access_token),
             'refresh': str(refresh)
         })
-    
-# --------------------------
-#  USER VIEW
-# --------------------------
-@swagger_auto_schema(tags=['Users'])
-class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
-    serializer_class = UserSerializer
 
-    def get_permissions(self):
-        if self.action in ['register', 'me', 'updateProfile']:
-            permission_classes = [permissions.AllowAny] if self.action == 'register' else [permissions.IsAuthenticated]
-        else:
-            permission_classes = [IsAdmin]
-        return [permission() for permission in permission_classes]
+@swagger_auto_schema(tags=['Authentication'])
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = LoginSerializer
 
-    # Register a new client
-    @action(detail=False, methods=['post'])
     @swagger_auto_schema(
-        operation_description="Register a new client",
-        request_body=UserClientRegistrationSerializer,
-        responses={201: UserSerializer, 400: "Bad Request - Invalid data"},
-        tags=['Authentication']
+        request_body=LoginSerializer,
+        responses={
+            200: TokenSerializer,
+            400: openapi.Response('Invalid credentials.', TokenSerializer),
+        }
     )
-    def clientRegister(self, request):
-        """ Register a new client and automatically associate an accountant """
-        serializer = UserClientRegistrationSerializer(data=request.data)
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()
+            user = serializer.validated_data['user']
+            login(request, user)
+            
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
+            
+            return Response({
+                'status': 'success',
+                'message': 'Successfully logged in.',
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                },
+                'user': {
+                    'id': str(user.id),
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'roles': [role.name for role in user.get_roles()],
+                }
+            }, status=status.HTTP_200_OK)
+        
+        return Response({
+            'status': 'error',
+            'message': 'Invalid credentials.',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    def get_serializer(self, *args, **kwargs):
+        return self.serializer_class(*args, **kwargs)
+    
 
-            # Associate the client with the accountant if the requester is authenticated
-            if request.user.is_authenticated:
-                AccountantClientRelationship.objects.create(
-                    accountant=request.user,
-                    client=user,
-                    status='pending'
+@swagger_auto_schema(tags=['Authentication'])
+class AdminRegistrationView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = AdminRegistrationSerializer
+
+    @swagger_auto_schema(
+        request_body=AdminRegistrationSerializer,
+        responses={
+            201: openapi.Response(
+                'Admin user and business account created successfully.',
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                        'tokens': openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                'refresh': openapi.Schema(type=openapi.TYPE_STRING),
+                                'access': openapi.Schema(type=openapi.TYPE_STRING),
+                            }
+                        ),
+                        'user': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        'business_account': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        'settings': openapi.Schema(type=openapi.TYPE_OBJECT),
+                    }
                 )
+            ),
+            400: openapi.Response('Invalid data provided.', TokenSerializer),
+        }
+    )
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            # Create user, business account, and settings
+            created_data = serializer.create(serializer.validated_data)
+            user = created_data['user']
+            business_account = created_data['business_account']
+            settings = created_data['settings']
 
-            return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
+
+            return Response({
+                'status': 'success',
+                'message': 'Admin user and business account created successfully.',
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                },
+                'user': {
+                    'id': str(user.id),
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'roles': [role.name for role in user.get_roles()],
+                },
+                'business_account': {
+                    'id': str(business_account.id),
+                    'business_name': business_account.business_name,
+                    'tax_number': business_account.tax_number,
+                },
+                'settings': {
+                    'currency': settings.currency,
+                    'language': settings.language,
+                    'notification_emails': settings.notification_emails,
+                    'two_factor_auth': settings.two_factor_auth,
+                }
+            }, status=status.HTTP_201_CREATED)
         
+        return Response({
+            'status': 'error',
+            'message': 'Invalid data provided.',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    def get_serializer(self, *args, **kwargs):
+        return self.serializer_class(*args, **kwargs)
+
+
+@swagger_auto_schema(tags=['Authentication'])
+class ExternalAccountantRegistrationView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = ExternalAccountantRegistrationSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            created_data = serializer.create(serializer.validated_data)
+            user = created_data['user']
+            external_accountant = created_data['external_accountant']
+
+            refresh = RefreshToken.for_user(user)
+
+            return Response({
+                'status': 'success',
+                'message': 'External accountant account created successfully.',
+                'tokens': {
+                    'refresh': str(refresh),
+                    'access': str(refresh.access_token),
+                },
+                'user': {
+                    'id': str(user.id),
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'roles': [role.name for role in user.get_roles()],
+                },
+                'external_accountant': {
+                    'id': str(external_accountant.id),
+                    'accountant_name': external_accountant.accountant_name,
+                    'company_name': external_accountant.company_name,
+                }
+            }, status=status.HTTP_201_CREATED)
+        
+        return Response({
+            'status': 'error',
+            'message': 'Invalid data provided.',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    def get_serializer(self, *args, **kwargs):
+        return self.serializer_class(*args, **kwargs)
+    
+@swagger_auto_schema(tags=['Account Settings'])
+class AccountSettingsViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = AccountSettingsSerializer
+
+    @swagger_auto_schema(
+        responses={
+            200: AccountSettingsSerializer,
+            400: openapi.Response('Invalid data provided.', AccountSettingsSerializer),
+        }
+    )
+
+    def list(self, request):
+        serializer = self.serializer_class(request.user)
+        return Response(serializer.data)
+
+    def update(self, request, pk=None):
+        serializer = self.serializer_class(request.user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     
-    # Get the current authenticated user details
-    @action(detail=False, methods=['get'])
-    @swagger_auto_schema(
-        operation_description="Get the current authenticated user details",
-        responses={200: UserSerializer},
-        tags=['users']
-    )
-    def me(self, request):
-        """ Retrieve the authenticated user details with accountant info if applicable """
-        serializer = UserSerializer(request.user)
-        data = serializer.data  # Convert to mutable dict
-        
-        # If user is a client, fetch accountant info
-        if hasattr(request.user, 'role') and request.user.role.name == 'CLIENT':
-            relationship = AccountantClientRelationship.objects.filter(client=request.user, status='active').first()
-            if relationship:
-                data['accountant_email'] = relationship.accountant.email
-        
-        return Response(data)
-    
-    # Update the current authenticated user profile 
-    @action(detail=False, methods=['patch'])
-    @swagger_auto_schema(
-        operation_description="Update the current authenticated user profile",
-        request_body=ClientProfileUpdateSerializer,
-        responses={200: ClientProfileUpdateSerializer},
-        tags=['users']
-    )
-    def updateClientProfile(self, request):
-        """ Update the current authenticated user profile """
-        user = request.user
-        profile, created = UserProfile.objects.get_or_create(user=user)  # Ensure profile exists
-        self.check_object_permissions(request, profile)  # Explicitly check permissions
-        
-        serializer = ClientProfileUpdateSerializer(profile, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        
-        return Response(serializer.data)
-
-
-class AccountantClientRelationshipViewSet(viewsets.ModelViewSet):
-    serializer_class = AccountantClientRelationshipSerializer
-
-    """
-    API endpoints for managing accountant-client relationships.
-    
-    list:
-    Return a list of all relationships visible to the authenticated user.
-    
-    create:
-    Create a new relationship. Only accountants can create relationships.
-    
-    retrieve:
-    Return the details of a specific relationship.
-    
-    update:
-    Update all fields of a relationship. Only accountants and admins can update.
-    
-    partial_update:
-    Update some fields of a relationship. Only accountants and admins can update.
-    
-    destroy:
-    Delete a relationship. Only admins can delete relationships.
-    """
-
-    def get_queryset(self):
-        # Handle schema generation for Swagger
-        if getattr(self, 'swagger_fake_view', False):
-            return AccountantClientRelationship.objects.none()
-
-        user = self.request.user
-        
-        # Safely check if the user has a role
-        if not getattr(user, 'role', None):
-            return AccountantClientRelationship.objects.none()
-        
-        # Filter relationships based on user role
-        if user.role.name == 'admin':
-            return AccountantClientRelationship.objects.all()
-        elif user.role.name == 'accountant':
-            return AccountantClientRelationship.objects.filter(accountant=user)
-        else:  # client
-            return AccountantClientRelationship.objects.filter(client=user)
-    
-    def get_permissions(self):
-        if self.action == 'create':
-            permission_classes = [IsAccountant]
-        elif self.action in ['update', 'partial_update']:
-            permission_classes = [IsAccountant | IsAdmin]
-        elif self.action == 'destroy':
-            permission_classes = [IsAdmin]
-        else:
-            permission_classes = [permissions.IsAuthenticated]
-        return [permission() for permission in permission_classes]
-    
-    @swagger_auto_schema(
-        operation_description="Accept an accountant invitation. Only clients can accept invitations.",
-        responses={
-            200: AccountantClientRelationshipSerializer,
-            403: "Forbidden - Not authorized to accept this invitation"
-        },
-        tags=['Client-Accountant Relationships']
-    )
-    @action(detail=True, methods=['post'])
-    @action(detail=True, methods=['post'])
-    def accept(self, request, pk=None):
-        relationship = self.get_object()
-        
-        # Only clients can accept invitations from accountants
-        if not request.user.role or request.user.role.name != 'client' or request.user.id != relationship.client.id:
-            return Response({"detail": "Only clients can accept accountant invitations"},
-                        status=status.HTTP_403_FORBIDDEN)
-        
-        # Check if the relationship is already active
-        if relationship.status == 'active':
-            return Response({"detail": "This relationship is already active."},
-                        status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check if the relationship is in a valid state to be accepted
-        if relationship.status != 'pending':
-            return Response({"detail": "Only pending relationships can be accepted."},
-                        status=status.HTTP_400_BAD_REQUEST)
-        
-        # Update the relationship status to 'active'
-        relationship.status = 'active'
-        relationship.save()
-        
-        serializer = self.get_serializer(relationship)
-        return Response(serializer.data)
-    
-    @swagger_auto_schema(
-        operation_description="Reject an accountant invitation. Only clients can reject invitations.",
-        responses={
-            200: AccountantClientRelationshipSerializer,
-            403: "Forbidden - Not authorized to reject this invitation"
-        },
-        tags=['Client-Accountant Relationships']
-    )
-    @action(detail=True, methods=['post'])
-    @action(detail=True, methods=['post'])
-    def reject(self, request, pk=None):
-        relationship = self.get_object()
-        
-        # Only clients can reject invitations from accountants
-        if not request.user.role or request.user.role.name != 'client' or request.user.id != relationship.client.id:
-            return Response({"detail": "Only clients can reject accountant invitations"},
-                        status=status.HTTP_403_FORBIDDEN)
-        
-        # Check if the relationship is already rejected
-        if relationship.status == 'rejected':
-            return Response({"detail": "This relationship is already rejected."},
-                        status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check if the relationship is in a valid state to be rejected
-        if relationship.status != 'pending':
-            return Response({"detail": "Only pending relationships can be rejected."},
-                        status=status.HTTP_400_BAD_REQUEST)
-        
-        # Update the relationship status to 'rejected'
-        relationship.status = 'rejected'
-        relationship.save()
-        
-        serializer = self.get_serializer(relationship)
-        return Response(serializer.data)
-    
-    @swagger_auto_schema(
-        operation_description="Set a primary accountant. Only clients can set their primary accountant.",
-        responses={
-            200: AccountantClientRelationshipSerializer,
-            403: "Forbidden - Not authorized to set primary accountant"
-        },
-        tags=['Client-Accountant Relationships']
-    )
-    @action(detail=True, methods=['post'])
-    @action(detail=True, methods=['post'])
-    def set_primary(self, request, pk=None):
-        relationship = self.get_object()
-        
-        # Only clients can set primary accountants
-        if not request.user.role or request.user.role.name != 'client' or request.user.id != relationship.client.id:
-            return Response({"detail": "Only clients can set their primary accountant"},
-                        status=status.HTTP_403_FORBIDDEN)
-        
-        # Check if the relationship is already primary
-        if relationship.is_primary:
-            return Response({"detail": "This accountant is already your primary accountant."},
-                        status=status.HTTP_400_BAD_REQUEST)
-        
-        # Check if the relationship is active
-        if relationship.status != 'active':
-            return Response({"detail": "Only active relationships can be set as primary."},
-                        status=status.HTTP_400_BAD_REQUEST)
-        
-        # Clear other primary relationships
-        AccountantClientRelationship.objects.filter(
-            client=relationship.client, is_primary=True
-        ).update(is_primary=False)
-        
-        # Set the current relationship as primary
-        relationship.is_primary = True
-        relationship.save()
-        
-        serializer = self.get_serializer(relationship)
-        return Response(serializer.data)
+    def get_serializer(self, *args, **kwargs):
+        return self.serializer_class(*args, **kwargs)

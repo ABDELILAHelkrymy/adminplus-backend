@@ -4,15 +4,6 @@ from django.apps import apps
 from django.core.serializers.json import DjangoJSONEncoder
 import json
 from django.contrib.auth import get_user_model
-from .models import UserProfile
-
-
-User = get_user_model()
-
-@receiver(post_save, sender=User)
-def create_user_profile(sender, instance, created, **kwargs):
-    if created:
-        UserProfile.objects.create(user=instance)
 
 
 # class CustomJSONEncoder(DjangoJSONEncoder):

@@ -1,10 +1,11 @@
 # serializers.py
 from rest_framework import serializers
-from .models import User, Role, AccountantClientRelationship, UserProfile
+from .models import User, Role, SystemRole, UserRole, BusinessAccount, ExternalAccountantAccount, AccountSettings
 from django.db import transaction
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth import authenticate
 
 class RoleNames:
     ADMIN = 'admin'
@@ -16,35 +17,28 @@ class RoleSerializer(serializers.ModelSerializer):
         model = Role
         fields = ('id', 'name')
 
-
-class UserProfileSerializer(serializers.ModelSerializer):
+class UserSerializer(serializers.ModelSerializer):
     class Meta:
-        model = UserProfile
-        fields = ('profile_picture', 'tax_number', 'business_type', 'currency', 'language')
+        model = User
+        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'is_active')
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    password = serializers.CharField(style={'input_type': 'password'})
+    password = serializers.CharField(write_only=True)
 
     def validate(self, data):
         email = data.get('email')
         password = data.get('password')
 
         if email and password:
-            from django.contrib.auth import authenticate
-            user = authenticate(request=self.context.get('request'),
-                                email=email, password=password)
-            if not user:
-                msg = 'Unable to log in with provided credentials.'
-                raise serializers.ValidationError(msg, code='authorization')
-            if not user.is_active:
-                raise serializers.ValidationError('User account is disabled.')
-        else:
-            msg = 'Must include "email" and "password".'
-            raise serializers.ValidationError(msg, code='authorization')
-
-        data['user'] = user
-        return data
+            user = authenticate(email=email, password=password)
+            if user:
+                if not user.is_active:
+                    raise serializers.ValidationError('User account is disabled.')
+                data['user'] = user
+                return data
+            raise serializers.ValidationError('Unable to log in with provided credentials.')
+        raise serializers.ValidationError('Must include "email" and "password".')
 
 class TokenSerializer(serializers.Serializer):
     access = serializers.CharField()
@@ -52,174 +46,150 @@ class TokenSerializer(serializers.Serializer):
 
 class TokenRefreshSerializer(serializers.Serializer):
     refresh = serializers.CharField()
+
+
+class AdminRegistrationSerializer(serializers.Serializer):
+    # User fields
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    phone_number = serializers.CharField(required=False)
     
-class UserSerializer(serializers.ModelSerializer):
-    role_name = serializers.CharField(source='role.name', read_only=True)
-    profile = UserProfileSerializer(required=False)
-    
-    class Meta:
-        model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'role_name', 
-                  'phone_number', 'address', 'company_name', 'is_verified', 
-                  'profile', 'created_at')
-        read_only_fields = ('id', 'is_verified', 'created_at')
+    # Business Account fields
+    business_name = serializers.CharField()
+    tax_number = serializers.CharField(required=False)
+    business_address = serializers.CharField(required=False)
+    business_phone = serializers.CharField(required=False)
+    website = serializers.URLField(required=False)
 
-def validate_password(self, value):
-    validate_password(value)
-    return value
+    # Account Settings fields
+    currency = serializers.ChoiceField(choices=AccountSettings.CURRENCY_CHOICES, required=False)
+    language = serializers.ChoiceField(choices=AccountSettings.LANGUAGE_CHOICES, required=False)
+    notification_emails = serializers.BooleanField(default=True)
+    two_factor_auth = serializers.BooleanField(default=False)
 
-# --------------------------
-#  USER REGISTRATION SERIALIZER
-# --------------------------
-class UserClientRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=8)
-    confirm_password = serializers.CharField(write_only=True, min_length=8)
-
-    class Meta:
-        model = User
-        fields = ['email', 'first_name', 'last_name', 'password', 'confirm_password', 'phone_number', 'address', 'company_name']
-
-    def validate(self, data):
-        if data['password'] != data['confirm_password']:
-            raise serializers.ValidationError({"password": "Passwords must match."})
-        return data
-
-    @transaction.atomic
     def create(self, validated_data):
-        role = Role.objects.get(name=RoleNames.CLIENT)
-        validated_data.pop('confirm_password')  # Remove confirm_password before saving
-        user = User.objects.create_user(role=role, **validated_data)
-        return user
+        # Extract settings data
+        settings_data = {
+            'currency': validated_data.pop('currency', AccountSettings.DEFAULT_CURRENCY),
+            'language': validated_data.pop('language', AccountSettings.DEFAULT_LANGUAGE),
+            'notification_emails': validated_data.pop('notification_emails', True),
+            'two_factor_auth': validated_data.pop('two_factor_auth', False),
+        }
 
+        # Extract business data
+        business_data = {
+            'business_name': validated_data.pop('business_name'),
+            'tax_number': validated_data.pop('tax_number', None),
+            'business_address': validated_data.pop('business_address', None),
+            'phone_number': validated_data.pop('business_phone', None),
+            'website': validated_data.pop('website', None),
+        }
 
-class ClientProfileUpdateSerializer(serializers.ModelSerializer):
-    accountant_email = serializers.EmailField(write_only=True, required=False)
-
-    class Meta:
-        model = UserProfile
-        fields = ['profile_picture', 'tax_number', 'business_type', 'currency', 'language', 'accountant_email']
-
-    def update(self, instance, validated_data):
-        accountant_email = validated_data.pop('accountant_email', None)
-        user = instance.user  # The client user
-
-        # Update profile fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-
-        # If the client provided an accountant email, create a relationship request
-        if accountant_email:
-            try:
-                accountant = User.objects.get(email=accountant_email)
-                AccountantClientRelationship.objects.get_or_create(
-                    accountant=accountant, 
-                    client=user,
-                    defaults={'status': 'pending'}
-                )
-            except User.DoesNotExist:
-                raise serializers.ValidationError({"accountant_email": "No accountant found with this email."})
-
-        return instance
-
-
-class AccountantClientRelationshipSerializer(serializers.ModelSerializer):
-    client_email = serializers.EmailField(write_only=True, required=False)
-    client = UserSerializer(read_only=True)
-    accountant = UserSerializer(read_only=True)
-    
-    class Meta:
-        model = AccountantClientRelationship
-        fields = ('id', 'accountant', 'client', 'client_email', 'is_primary', 'status', 'created_at')
-        read_only_fields = ('id', 'created_at')
-    
-    def validate(self, data):
-        client_email = data.get('client_email')
-        accountant = self.context['request'].user
-        
-        if not accountant.role or accountant.role.name != RoleNames.ACCOUNTANT:
-            raise serializers.ValidationError({"accountant": "Only accountants can create relationships"})
-        
-        try:
-            client_role = Role.objects.get(name=RoleNames.CLIENT)
-            client = User.objects.get(email=client_email, role=client_role)
-        except (User.DoesNotExist, Role.DoesNotExist):
-            raise serializers.ValidationError({"client_email": "Client with this email does not exist"})
-        
-        if client.id == accountant.id:
-            raise serializers.ValidationError({"client_email": "An accountant cannot create a relationship with themselves"})
-        
-        return data
-    
-    def create(self, validated_data):
-        client_email = validated_data.pop('client_email')
-        accountant = self.context['request'].user
-        
-        try:
-            client_role = Role.objects.get(name=RoleNames.CLIENT)
-            client = User.objects.get(email=client_email, role=client_role)
-        except (User.DoesNotExist, Role.DoesNotExist):
-            raise serializers.ValidationError({"client_email": "Client with this email does not exist"})
-        
-        # Check if relationship already exists
-        existing = AccountantClientRelationship.objects.filter(accountant=accountant, client=client).first()
-        if existing:
-            if existing.status == 'rejected':
-                existing.status = 'pending'
-                existing.save()
-                return existing
-            return existing
-        
-        # If this is marked as primary, clear other primary relationships
-        if validated_data.get('is_primary', False):
-            AccountantClientRelationship.objects.filter(client=client, is_primary=True).update(is_primary=False)
-        
-        relationship = AccountantClientRelationship.objects.create(
-            accountant=accountant,
-            client=client,
-            **validated_data
+        # Create user
+        user = User.objects.create_user(
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name'],
+            phone_number=validated_data.get('phone_number'),
+            is_active=True,
+            is_verified=False  # Requires email verification
         )
+
+        # Get or create admin role
+        admin_role = Role.objects.get(name=SystemRole.ADMIN)
         
-        return relationship
-    client_email = serializers.EmailField(write_only=True, required=False)
-    client = UserSerializer(read_only=True)
-    accountant = UserSerializer(read_only=True)
-    
-    class Meta:
-        model = AccountantClientRelationship
-        fields = ('id', 'accountant', 'client', 'client_email', 'is_primary', 'status', 'created_at')
-        read_only_fields = ('id', 'created_at')
-    
-    def create(self, validated_data):
-        client_email = validated_data.pop('client_email', None)
-        accountant = self.context['request'].user
-        
-        if not accountant.role or accountant.role.name != 'accountant':
-            raise serializers.ValidationError("Only accountants can create relationships")
-        
-        try:
-            client_role = Role.objects.get(name='client')
-            client = User.objects.get(email=client_email, role=client_role)
-        except (User.DoesNotExist, Role.DoesNotExist):
-            raise serializers.ValidationError("Client with this email does not exist")
-        
-        # Check if relationship already exists
-        existing = AccountantClientRelationship.objects.filter(accountant=accountant, client=client).first()
-        if existing:
-            if existing.status == 'rejected':
-                existing.status = 'pending'
-                existing.save()
-                return existing
-            return existing
-        
-        # If this is marked as primary, clear other primary relationships
-        if validated_data.get('is_primary', False):
-            AccountantClientRelationship.objects.filter(client=client, is_primary=True).update(is_primary=False)
-        
-        relationship = AccountantClientRelationship.objects.create(
-            accountant=accountant,
-            client=client,
-            **validated_data
+        # Assign admin role to user
+        UserRole.objects.create(
+            user=user,
+            role=admin_role,
+            system_role=SystemRole.ADMIN
         )
+
+        # Create account settings
+        account_settings = AccountSettings.objects.create(**settings_data)
+
+        # Create business account with settings
+        business_data['primary_user'] = user
+        business_data['settings'] = account_settings
+        business_account = BusinessAccount.objects.create(**business_data)
         
-        return relationship
+        return {
+            'user': user,
+            'business_account': business_account,
+            'settings': account_settings
+        }
+
+class ExternalAccountantRegistrationSerializer(serializers.Serializer):
+    # User fields
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    phone_number = serializers.CharField(required=False)
+    
+    # External Accountant fields
+    accountant_name = serializers.CharField()
+    company_name = serializers.CharField(required=False)
+    tax_number = serializers.CharField(required=False)
+    contact_phone = serializers.CharField(required=False)
+
+    def create(self, validated_data):
+        # Extract accountant data
+        accountant_data = {
+            'accountant_name': validated_data.pop('accountant_name'),
+            'company_name': validated_data.pop('company_name', None),
+            'tax_number': validated_data.pop('tax_number', None),
+            'contact_phone': validated_data.pop('contact_phone', None),
+        }
+
+        # Create user
+        user = User.objects.create_user(
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name'],
+            phone_number=validated_data.get('phone_number'),
+            is_active=True,
+            is_verified=False
+        )
+
+        # Get viewer role (external accountants are viewers by default)
+        viewer_role = Role.objects.get(name=SystemRole.VIEWER)
+        
+        # Assign viewer role to user
+        UserRole.objects.create(
+            user=user,
+            role=viewer_role,
+            system_role=SystemRole.VIEWER
+        )
+
+        # Create external accountant account
+        accountant_data['user'] = user
+        external_accountant = ExternalAccountantAccount.objects.create(**accountant_data)
+        
+        return {
+            'user': user,
+            'external_accountant': external_accountant
+        }
+    
+
+class AccountSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccountSettings
+        fields = ['currency', 'language', 'notification_emails', 'two_factor_auth']
+        read_only_fields = ['created_at', 'updated_at']
+
+    def validate_currency(self, value):
+        valid_currencies = dict(AccountSettings.CURRENCY_CHOICES)
+        if value not in valid_currencies:
+            raise serializers.ValidationError(f"Invalid currency. Choose from: {', '.join(valid_currencies.keys())}")
+        return value
+
+    def validate_language(self, value):
+        valid_languages = dict(AccountSettings.LANGUAGE_CHOICES)
+        if value not in valid_languages:
+            raise serializers.ValidationError(f"Invalid language. Choose from: {', '.join(valid_languages.keys())}")
+        return value

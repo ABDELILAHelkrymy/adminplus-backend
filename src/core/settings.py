@@ -157,11 +157,11 @@ DATABASES = {
 is_local = config('IS_LOCAL', default=False, cast=bool)
 
 CONN_MAX_AGE = config('CONN_MAX_AGE', default=600, cast=int)
-DATABASES_URL = config('DATABASE_URL',cast=str)
-if DATABASES_URL:
+DATABASE_URL = config('DATABASE_URL',cast=str)
+if DATABASE_URL:
     import dj_database_url
     DATABASES['default'] = dj_database_url.config(
-        default=DATABASES_URL,
+        default=DATABASE_URL,
         conn_health_checks=True,
         conn_max_age=CONN_MAX_AGE,
         )
