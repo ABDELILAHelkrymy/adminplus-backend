@@ -20,7 +20,7 @@ class RoleSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'role', 'is_active')
+        fields = ('id', 'email', 'first_name', 'last_name', 'is_active')
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -193,3 +193,45 @@ class AccountSettingsSerializer(serializers.ModelSerializer):
         if value not in valid_languages:
             raise serializers.ValidationError(f"Invalid language. Choose from: {', '.join(valid_languages.keys())}")
         return value
+
+class InternalUserCreateSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    first_name = serializers.CharField()
+    last_name = serializers.CharField()
+    phone_number = serializers.CharField(required=False)
+    system_role = serializers.ChoiceField(choices=[
+        (SystemRole.INTERNAL_ACCOUNTANT, 'Internal Accountant'),
+        (SystemRole.EMPLOYEE, 'Employee'),
+        (SystemRole.VIEWER, 'Viewer'),
+    ])
+    role = serializers.PrimaryKeyRelatedField(queryset=Role.objects.all(), write_only=True)
+
+    def create(self, validated_data):
+        # Extract and remove system_role from validated_data
+        system_role = validated_data.pop('system_role')
+        
+        # Create user
+        user = User.objects.create_user(
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data['first_name'],
+            last_name=validated_data['last_name'],
+            phone_number=validated_data.get('phone_number'),
+            is_active=True,
+            is_verified=False,
+            created_by=self.context['request'].user
+        )
+        
+        # Assign role to user
+        UserRole.objects.create(
+            user=user,
+            role=validated_data['role'],
+            system_role=system_role
+        )
+
+        # Add user to business account
+        business_account = self.context['request'].user.owned_business
+        business_account.internal_users.add(user)
+        
+        return user

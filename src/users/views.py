@@ -10,11 +10,11 @@ from .serializers import (
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from .serializers import LoginSerializer, TokenSerializer, TokenRefreshSerializer, UserSerializer, AdminRegistrationSerializer, ExternalAccountantRegistrationSerializer, AccountSettingsSerializer
+from .serializers import LoginSerializer, TokenSerializer, TokenRefreshSerializer, UserSerializer, AdminRegistrationSerializer, ExternalAccountantRegistrationSerializer, AccountSettingsSerializer, InternalUserCreateSerializer
 from django.contrib.auth import login
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
-
+from .permissions import IsBusinessOwner  # Add this import at the top
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -237,3 +237,81 @@ class AccountSettingsViewSet(viewsets.ViewSet):
     
     def get_serializer(self, *args, **kwargs):
         return self.serializer_class(*args, **kwargs)
+
+@swagger_auto_schema(tags=['Users'])
+class InternalUserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all()
+    permission_classes = [IsAuthenticated, IsBusinessOwner]
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return InternalUserCreateSerializer
+        return UserSerializer
+
+    def get_queryset(self):
+        # Only return users that belong to the current user's business
+        if hasattr(self.request.user, 'owned_business'):
+            return self.request.user.owned_business.internal_users.all()
+        return User.objects.none()
+
+    @swagger_auto_schema(
+        tags=['Users'],
+        operation_summary="Create internal user",
+        operation_description="Create a new internal user (Internal Accountant, Employee, or Viewer)",
+        request_body=InternalUserCreateSerializer,
+        responses={
+            201: openapi.Response(
+                'User created successfully',
+                UserSerializer
+            ),
+            400: 'Invalid data',
+            403: 'Permission denied'
+        }
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        response_serializer = UserSerializer(user)
+        return Response(
+            {
+                'status': 'success',
+                'message': 'User created successfully',
+                'user': response_serializer.data
+            }, 
+            status=status.HTTP_201_CREATED
+        )
+
+    @swagger_auto_schema(
+        tags=['Users'],
+        operation_summary="List internal users",
+        operation_description="List all internal users for the current business account",
+        responses={
+            200: UserSerializer(many=True),
+            403: 'Permission denied'
+        }
+    )
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = UserSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        tags=['Users'],
+        operation_summary="Delete internal user",
+        operation_description="Remove an internal user from the business account",
+        responses={
+            204: 'User deleted successfully',
+            403: 'Permission denied',
+            404: 'User not found'
+        }
+    )
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        # Remove user from business account
+        if hasattr(request.user, 'owned_business'):
+            request.user.owned_business.internal_users.remove(instance)
+        instance.is_active = False
+        instance.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
