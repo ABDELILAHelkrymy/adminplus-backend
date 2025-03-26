@@ -3,8 +3,9 @@ from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Q
-from .models import User, Role
+from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus
 from .serializers import (
+    AccountantInvitationSerializer,
     RoleSerializer
 )
 from rest_framework.permissions import IsAuthenticated
@@ -315,3 +316,150 @@ class InternalUserViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+@swagger_auto_schema(tags=['Invitations'])
+class AccountantInvitationViewSet(viewsets.ModelViewSet):
+    serializer_class = AccountantInvitationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, 'owned_business'):
+            # Business owners see invitations they sent
+            return AccountantInvitation.objects.filter(sender=user.owned_business)
+        elif hasattr(user, 'accountant_account'):
+            # Accountants see invitations sent to them
+            return AccountantInvitation.objects.filter(
+                accountant_email=user.email,
+                status=InvitationStatus.PENDING
+            )
+        return AccountantInvitation.objects.none()
+
+    @swagger_auto_schema(
+        operation_summary="Send invitation to accountant",
+        request_body=AccountantInvitationSerializer,
+        responses={
+            201: AccountantInvitationSerializer,
+            400: 'Invalid data',
+            403: 'Permission denied'
+        }
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        invitation = serializer.save()
+        
+        # Here you might want to send an email to the accountant
+        # send_invitation_email(invitation)
+        
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED
+        )
+
+    @swagger_auto_schema(
+        operation_summary="Accept invitation",
+        responses={
+            200: AccountantInvitationSerializer,
+            400: "Invalid request or expired invitation",
+            403: "Permission denied",
+            404: "Invitation not found"
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        invitation = self.get_object()
+        try:
+            accountant_account = request.user.accountant_account
+            connection = invitation.accept_invitation(accountant_account)
+            
+            serializer = self.get_serializer(invitation)
+            return Response({
+                'status': 'success',
+                'message': 'Invitation accepted successfully',
+                'invitation': serializer.data,
+                'connection': {
+                    'id': str(connection.id),
+                    'client': connection.client.business_name,
+                    'access_level': connection.access_level,
+                }
+            })
+        except (ExternalAccountantAccount.DoesNotExist, ValueError) as e:
+            return Response({
+                'status': 'error',
+                'message': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        operation_summary="Reject invitation",
+        responses={
+            200: "Invitation rejected successfully",
+            400: "Invalid request",
+            403: "Permission denied",
+            404: "Invitation not found"
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        invitation = self.get_object()
+        try:
+            invitation.reject_invitation()
+            return Response({
+                'status': 'success',
+                'message': 'Invitation rejected successfully'
+            })
+        except ValueError as e:
+            return Response({
+                'status': 'error',
+                'message': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        operation_summary="Cancel invitation",
+        responses={
+            200: "Invitation cancelled successfully",
+            400: "Invalid request",
+            403: "Permission denied",
+            404: "Invitation not found"
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        invitation = self.get_object()
+        try:
+            invitation.cancel_invitation(request.user)
+            return Response({
+                'status': 'success',
+                'message': 'Invitation cancelled successfully'
+            })
+        except ValueError as e:
+            return Response({
+                'status': 'error',
+                'message': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        operation_summary="Resend invitation",
+        responses={
+            200: "Invitation resent successfully",
+            404: "Invitation not found",
+            403: "Permission denied"
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def resend(self, request, pk=None):
+        invitation = self.get_object()
+        if invitation.status == InvitationStatus.PENDING:
+            invitation.expiry_date = timezone.now() + timezone.timedelta(days=7)
+            invitation.sent_date = timezone.now()
+            invitation.save()
+            
+            # Here you might want to resend the email
+            # send_invitation_email(invitation)
+            
+            serializer = self.get_serializer(invitation)
+            return Response(serializer.data)
+        return Response({
+            'status': 'error',
+            'message': 'Only pending invitations can be resent'
+        }, status=status.HTTP_400_BAD_REQUEST)

@@ -1,6 +1,6 @@
 # serializers.py
 from rest_framework import serializers
-from .models import User, Role, SystemRole, UserRole, BusinessAccount, ExternalAccountantAccount, AccountSettings
+from .models import User, Role, SystemRole, UserRole, BusinessAccount, ExternalAccountantAccount, AccountSettings, AccountantInvitation
 from django.db import transaction
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -235,3 +235,76 @@ class InternalUserCreateSerializer(serializers.Serializer):
         business_account.internal_users.add(user)
         
         return user
+    
+class BusinessAccountMinimalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BusinessAccount
+        fields = ['id', 'business_name', 'phone_number', 'website']
+
+class AccountantInvitationSerializer(serializers.ModelSerializer):
+    sender_details = BusinessAccountMinimalSerializer(source='sender', read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    status_display = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
+    recipient_details = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AccountantInvitation
+        fields = [
+            'id', 
+            'sender_details',
+            'recipient_details',
+            'accountant_email', 
+            'invitation_message',
+            'sent_date',
+            'expiry_date',
+            'status',
+            'status_display',
+            'is_expired',
+            'created_by_name',
+            'response_date'
+        ]
+        read_only_fields = [
+            'sent_date', 
+            'expiry_date', 
+            'status', 
+            'sender_details',
+            'recipient_details',
+            'created_by_name',
+            'response_date'
+        ]
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return f"{obj.created_by.first_name} {obj.created_by.last_name}"
+        return None
+
+    def get_status_display(self, obj):
+        return obj.get_status_display()
+
+    def get_is_expired(self, obj):
+        return obj.is_expired()
+
+    def get_recipient_details(self, obj):
+        if obj.recipient:
+            return {
+                'id': str(obj.recipient.id),
+                'accountant_name': obj.recipient.accountant_name,
+                'company_name': obj.recipient.company_name
+            }
+        return None
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        business_account = request.user.owned_business
+        
+        invitation = business_account.prepare_accountant_invitation(
+            email=validated_data['accountant_email'],
+            created_by=request.user
+        )
+        
+        if validated_data.get('invitation_message'):
+            invitation.invitation_message = validated_data['invitation_message']
+            invitation.save()
+        
+        return invitation

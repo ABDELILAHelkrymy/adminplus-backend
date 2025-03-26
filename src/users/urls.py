@@ -1,13 +1,15 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    RoleViewSet, CustomTokenRefreshView, LoginView, AdminRegistrationView, ExternalAccountantRegistrationView, AccountSettingsViewSet, InternalUserViewSet
+    RoleViewSet, CustomTokenRefreshView, LoginView, AdminRegistrationView, ExternalAccountantRegistrationView, AccountSettingsViewSet, InternalUserViewSet,
+    AccountantInvitationViewSet
 )
 
 router = DefaultRouter()
 router.register(r'roles', RoleViewSet, basename='role')
 router.register(r'account-settings', AccountSettingsViewSet, basename='account-settings')
 router.register(r'Users', InternalUserViewSet, basename='internal-user')
+router.register(r'accountant-invitations', AccountantInvitationViewSet, basename='accountant-invitation')
 
 urlpatterns = [
     path('', include(router.urls)),

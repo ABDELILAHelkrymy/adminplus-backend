@@ -281,18 +281,106 @@ class AccountantInvitation(models.Model):
     
     def update_status(self, new_status):
         """
-        Update invitation status with timestamp
+        Update invitation status and handle post-status update actions
         :param new_status: New status to set
+        :return: Created connection if status is accepted, None otherwise
         """
+        old_status = self.status
         self.status = new_status
         self.response_date = timezone.now()
         self.save()
-    
+
+        # Handle acceptance specifically
+        if new_status == InvitationStatus.ACCEPTED and old_status != InvitationStatus.ACCEPTED:
+            if not self.recipient:
+                raise ValueError("Cannot accept invitation without recipient")
+
+            # Create the connection
+            connection, created = ClientAccountantConnection.objects.get_or_create(
+                client=self.sender,
+                accountant=self.recipient,
+                defaults={
+                    'access_level': ConnectionAccessLevel.READ_ONLY,
+                    'created_by': self.created_by,
+                    'is_active': True
+                }
+            )
+
+            # Create data sharing preferences
+            if created:
+                DataSharingPreference.objects.create(
+                    connection=connection,
+                    updated_by=self.created_by
+                )
+
+            # Log the connection activity
+            ConnectionActivity.log_activity(
+                connection=connection,
+                user=self.recipient.user,
+                action_type='connection_created',
+                description='Connection established via invitation acceptance'
+            )
+
+            return connection
+        return None
+
+    def accept_invitation(self, accountant_account):
+        """
+        Accept invitation and create connection
+        :param accountant_account: ExternalAccountantAccount instance accepting the invitation
+        :return: Created ClientAccountantConnection instance
+        :raises: ValueError if invitation cannot be accepted
+        """
+        if self.status != InvitationStatus.PENDING:
+            raise ValueError("Only pending invitations can be accepted")
+        
+        if self.is_expired():
+            raise ValueError("Cannot accept expired invitation")
+
+        if self.accountant_email != accountant_account.user.email:
+            raise ValueError("Invitation can only be accepted by the invited accountant")
+
+        # Set the recipient
+        self.recipient = accountant_account
+        self.save()
+        
+        # Update status and create connection
+        connection = self.update_status(InvitationStatus.ACCEPTED)
+        
+        if not connection:
+            raise ValueError("Failed to create connection")
+        
+        return connection
+
+    def reject_invitation(self):
+        """
+        Reject the invitation
+        """
+        if self.status != InvitationStatus.PENDING:
+            raise ValueError("Only pending invitations can be rejected")
+        
+        self.update_status(InvitationStatus.REJECTED)
+
+    def cancel_invitation(self, cancelled_by):
+        """
+        Cancel the invitation
+        :param cancelled_by: User cancelling the invitation
+        """
+        if self.status != InvitationStatus.PENDING:
+            raise ValueError("Only pending invitations can be cancelled")
+        
+        if cancelled_by != self.created_by and cancelled_by != self.sender.primary_user:
+            raise ValueError("Only the creator or business owner can cancel the invitation")
+        
+        self.update_status(InvitationStatus.CANCELLED)
+
     def is_expired(self):
         """
-        Check if invitation is expired
-        :return: Boolean indicating expiration status
+        Check if the invitation has expired
+        :return: Boolean indicating if invitation has expired
         """
+        if not self.expiry_date:
+            return False
         return timezone.now() > self.expiry_date
 
 
