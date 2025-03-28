@@ -3,10 +3,17 @@ from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Q
-from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus
+from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus, ClientAccountantConnection, ConnectionAccessLevel, ConnectionActivity
 from .serializers import (
     AccountantInvitationSerializer,
-    RoleSerializer
+    RoleSerializer,
+    ClientAccountantConnectionSerializer,
+    DataSharingPreferenceSerializer,
+    EmailVerificationConfirmSerializer,
+    EmailVerificationRequestSerializer,
+    PasswordChangeSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -16,6 +23,12 @@ from django.contrib.auth import login
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from .permissions import IsBusinessOwner  # Add this import at the top
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes
+from django.core.mail import send_mail
+from django.conf import settings
+from .utils import send_password_reset_email
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -462,4 +475,308 @@ class AccountantInvitationViewSet(viewsets.ModelViewSet):
         return Response({
             'status': 'error',
             'message': 'Only pending invitations can be resent'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Connections'])
+class ClientAccountantConnectionViewSet(viewsets.ModelViewSet):
+    serializer_class = ClientAccountantConnectionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, 'owned_business'):
+            # Business owners see their connections
+            return ClientAccountantConnection.objects.filter(client=user.owned_business)
+        elif hasattr(user, 'accountant_account'):
+            # Accountants see connections where they are the accountant
+            return ClientAccountantConnection.objects.filter(accountant=user.accountant_account)
+        return ClientAccountantConnection.objects.none()
+
+    @swagger_auto_schema(
+        operation_summary="Update connection access level",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'access_level': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=[level[0] for level in ConnectionAccessLevel.choices]
+                ),
+            }
+        ),
+        responses={
+            200: ClientAccountantConnectionSerializer,
+            400: "Invalid access level",
+            404: "Connection not found"
+        }
+    )
+    @action(detail=True, methods=['patch'])
+    def update_access(self, request, pk=None):
+        connection = self.get_object()
+        access_level = request.data.get('access_level')
+        
+        if access_level not in dict(ConnectionAccessLevel.choices):
+            return Response({
+                'status': 'error',
+                'message': 'Invalid access level'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        connection.update_access_level(access_level)
+        serializer = self.get_serializer(connection)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_summary="Update data sharing preferences",
+        request_body=DataSharingPreferenceSerializer,
+        responses={
+            200: ClientAccountantConnectionSerializer,
+            400: "Invalid data",
+            404: "Connection not found"
+        }
+    )
+    @action(detail=True, methods=['patch'])
+    def update_sharing(self, request, pk=None):
+        connection = self.get_object()
+        serializer = DataSharingPreferenceSerializer(
+            connection.data_sharing,
+            data=request.data,
+            partial=True
+        )
+        
+        if serializer.is_valid():
+            serializer.save(updated_by=request.user)
+            connection_serializer = self.get_serializer(connection)
+            return Response(connection_serializer.data)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        operation_summary="Deactivate connection",
+        responses={
+            200: "Connection deactivated successfully",
+            404: "Connection not found"
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def deactivate(self, request, pk=None):
+        connection = self.get_object()
+        connection.manage_connection_status(False)
+        
+        # Log the activity
+        ConnectionActivity.log_activity(
+            connection=connection,
+            user=request.user,
+            action_type='connection_deactivated',
+            description='Connection deactivated by user'
+        )
+        
+        return Response({
+            'status': 'success',
+            'message': 'Connection deactivated successfully'
+        })
+
+    @swagger_auto_schema(
+        operation_summary="Reactivate connection",
+        responses={
+            200: "Connection reactivated successfully",
+            404: "Connection not found"
+        }
+    )
+    @action(detail=True, methods=['post'])
+    def reactivate(self, request, pk=None):
+        connection = self.get_object()
+        connection.manage_connection_status(True)
+        
+        # Log the activity
+        ConnectionActivity.log_activity(
+            connection=connection,
+            user=request.user,
+            action_type='connection_reactivated',
+            description='Connection reactivated by user'
+        )
+        
+        return Response({
+            'status': 'success',
+            'message': 'Connection reactivated successfully'
+        })
+
+@swagger_auto_schema(tags=['Authentication'])
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = PasswordResetRequestSerializer
+
+    @swagger_auto_schema(
+        operation_summary="Request password reset email",
+        request_body=PasswordResetRequestSerializer,
+        responses={
+            200: openapi.Response(
+                description="Reset email sent",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            )
+        }
+    )
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            try:
+                user = User.objects.get(email=email)
+                send_password_reset_email(user)
+            except User.DoesNotExist:
+                pass  # Don't reveal that email doesn't exist
+            
+            return Response({
+                'status': 'success',
+                'message': 'If an account exists with this email, a password reset link has been sent.'
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Authentication'])
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = PasswordResetConfirmSerializer
+
+    @swagger_auto_schema(
+        operation_summary="Confirm password reset",
+        request_body=PasswordResetConfirmSerializer,
+        responses={
+            200: openapi.Response(
+                description="Password reset successful",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            )
+        }
+    )
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            try:
+                uid = urlsafe_base64_decode(serializer.validated_data['uidb64']).decode()
+                user = User.objects.get(pk=uid)
+                token = serializer.validated_data['token']
+
+                if default_token_generator.check_token(user, token):
+                    user.set_password(serializer.validated_data['new_password'])
+                    user.save()
+                    return Response({
+                        'status': 'success',
+                        'message': 'Password has been reset successfully'
+                    })
+                else:
+                    return Response({
+                        'status': 'error',
+                        'message': 'Invalid or expired reset link'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+            except (TypeError, ValueError, User.DoesNotExist):
+                return Response({
+                    'status': 'error',
+                    'message': 'Invalid reset link'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Authentication'])
+class PasswordChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = PasswordChangeSerializer
+
+    @swagger_auto_schema(
+        operation_summary="Change password",
+        request_body=PasswordChangeSerializer,
+        responses={
+            200: "Password changed successfully",
+            400: "Invalid password"
+        }
+    )
+    def post(self, request):
+        serializer = self.serializer_class(
+            data=request.data, 
+            context={'request': request}
+        )
+        if serializer.is_valid():
+            request.user.set_password(serializer.validated_data['new_password'])
+            request.user.save()
+            return Response({
+                'status': 'success',
+                'message': 'Password changed successfully'
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Authentication'])
+class EmailVerificationRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = EmailVerificationRequestSerializer
+
+    @swagger_auto_schema(
+        operation_summary="Request email verification",
+        responses={
+            200: "Verification email sent",
+            400: "Invalid request"
+        }
+    )
+    def post(self, request):
+        user = request.user
+        if user.is_verified:
+            return Response({
+                'status': 'error',
+                'message': 'Email already verified'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        token = default_token_generator.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        
+        # Send verification email
+        verify_url = f"{settings.FRONTEND_URL}/verify-email/{uid}/{token}"
+        send_mail(
+            'Verify Your Email',
+            f'Click here to verify your email: {verify_url}',
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email]
+        )
+        
+        return Response({
+            'status': 'success',
+            'message': 'Verification email sent'
+        })
+
+@swagger_auto_schema(tags=['Authentication'])
+class EmailVerificationConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary="Confirm email verification",
+        responses={
+            200: "Email verified successfully",
+            400: "Invalid verification link"
+        }
+    )
+    def get(self, request, uidb64, token):
+        try:
+            uid = urlsafe_base64_decode(uidb64).decode()
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, User.DoesNotExist):
+            user = None
+
+        if user and default_token_generator.check_token(user, token):
+            user.is_verified = True
+            user.save()
+            return Response({
+                'status': 'success',
+                'message': 'Email verified successfully'
+            })
+        
+        return Response({
+            'status': 'error',
+            'message': 'Invalid verification link'
         }, status=status.HTTP_400_BAD_REQUEST)

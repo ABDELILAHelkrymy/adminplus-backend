@@ -1,6 +1,6 @@
 # serializers.py
 from rest_framework import serializers
-from .models import User, Role, SystemRole, UserRole, BusinessAccount, ExternalAccountantAccount, AccountSettings, AccountantInvitation
+from .models import User, Role, SystemRole, UserRole, BusinessAccount, ExternalAccountantAccount, AccountSettings, AccountantInvitation, DataSharingPreference, ClientAccountantConnection
 from django.db import transaction
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -46,7 +46,6 @@ class TokenSerializer(serializers.Serializer):
 
 class TokenRefreshSerializer(serializers.Serializer):
     refresh = serializers.CharField()
-
 
 class AdminRegistrationSerializer(serializers.Serializer):
     # User fields
@@ -308,3 +307,64 @@ class AccountantInvitationSerializer(serializers.ModelSerializer):
             invitation.save()
         
         return invitation
+
+class DataSharingPreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DataSharingPreference
+        fields = [
+            'share_invoices', 'share_expenses', 'share_bank_data',
+            'share_tax_documents', 'share_reports'
+        ]
+
+class ClientAccountantConnectionSerializer(serializers.ModelSerializer):
+    client_details = BusinessAccountMinimalSerializer(source='client', read_only=True)
+    accountant_details = serializers.SerializerMethodField()
+    data_sharing = DataSharingPreferenceSerializer(read_only=True)
+    
+    class Meta:
+        model = ClientAccountantConnection
+        fields = [
+            'id', 'client_details', 'accountant_details', 'connection_date',
+            'is_active', 'last_access', 'access_level', 'notes', 'data_sharing'
+        ]
+        read_only_fields = ['connection_date', 'last_access']
+
+    def get_accountant_details(self, obj):
+        return {
+            'id': str(obj.accountant.id),
+            'accountant_name': obj.accountant.accountant_name,
+            'company_name': obj.accountant.company_name,
+            'contact_phone': obj.accountant.contact_phone
+        }
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uidb64 = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+    
+    def validate_new_password(self, value):
+        validate_password(value)
+        return value
+
+class PasswordChangeSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+    
+    def validate_new_password(self, value):
+        validate_password(value)
+        return value
+
+    def validate_old_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Old password is incorrect.")
+        return value
+
+class EmailVerificationRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+class EmailVerificationConfirmSerializer(serializers.Serializer):
+    token = serializers.CharField()
