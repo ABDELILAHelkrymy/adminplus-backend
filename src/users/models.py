@@ -75,6 +75,7 @@ class Role(models.Model):
 class SystemRole(models.TextChoices):
     ADMIN = 'admin', _('Admin')
     INTERNAL_ACCOUNTANT = 'internal_accountant', _('Internal Accountant')
+    EXTERNAL_ACCOUNTANT = 'external_accountant', _('External Accountant')
     EMPLOYEE = 'employee', _('Employee')
     VIEWER = 'viewer', _('Viewer')
 

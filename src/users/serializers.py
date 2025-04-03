@@ -71,8 +71,8 @@ class AdminRegistrationSerializer(serializers.Serializer):
     def create(self, validated_data):
         # Extract settings data
         settings_data = {
-            'currency': validated_data.pop('currency', AccountSettings.DEFAULT_CURRENCY),
-            'language': validated_data.pop('language', AccountSettings.DEFAULT_LANGUAGE),
+            'currency': validated_data.pop('currency', 'USD'),
+            'language': validated_data.pop('language', 'en'),
             'notification_emails': validated_data.pop('notification_emails', True),
             'two_factor_auth': validated_data.pop('two_factor_auth', False),
         }
@@ -94,10 +94,10 @@ class AdminRegistrationSerializer(serializers.Serializer):
             last_name=validated_data['last_name'],
             phone_number=validated_data.get('phone_number'),
             is_active=True,
-            is_verified=False  # Requires email verification
+            is_verified=False
         )
 
-        # Get or create admin role
+        # Get admin role
         admin_role = Role.objects.get(name=SystemRole.ADMIN)
         
         # Assign admin role to user
@@ -107,18 +107,18 @@ class AdminRegistrationSerializer(serializers.Serializer):
             system_role=SystemRole.ADMIN
         )
 
-        # Create account settings
-        account_settings = AccountSettings.objects.create(**settings_data)
-
-        # Create business account with settings
+        # Create business account with the primary user
         business_data['primary_user'] = user
-        business_data['settings'] = account_settings
         business_account = BusinessAccount.objects.create(**business_data)
+        
+        # Create settings for the business account
+        settings_data['business_account'] = business_account
+        settings = AccountSettings.objects.create(**settings_data)
         
         return {
             'user': user,
             'business_account': business_account,
-            'settings': account_settings
+            'settings': settings
         }
 
 class ExternalAccountantRegistrationSerializer(serializers.Serializer):
@@ -155,14 +155,14 @@ class ExternalAccountantRegistrationSerializer(serializers.Serializer):
             is_verified=False
         )
 
-        # Get viewer role (external accountants are viewers by default)
-        viewer_role = Role.objects.get(name=SystemRole.VIEWER)
+        # Get external accountant role
+        external_accountant_role = Role.objects.get(name=SystemRole.EXTERNAL_ACCOUNTANT)
         
-        # Assign viewer role to user
+        # Assign external accountant role to user
         UserRole.objects.create(
             user=user,
-            role=viewer_role,
-            system_role=SystemRole.VIEWER
+            role=external_accountant_role,
+            system_role=SystemRole.EXTERNAL_ACCOUNTANT
         )
 
         # Create external accountant account
