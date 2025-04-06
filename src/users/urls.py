@@ -17,7 +17,7 @@ urlpatterns = [
     path('', include(router.urls)),
     path('login/', LoginView.as_view(), name='login'),
     path('token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
-    path('register/client', AdminRegistrationView.as_view(), name='register'),
+    path('register/client/', AdminRegistrationView.as_view(), name='register'),
     path('register/accountant/', ExternalAccountantRegistrationView.as_view(), name='register_accountant'),
     path('password/reset/', PasswordResetRequestView.as_view(), name='password_reset_request'),
     path('password/reset/confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),

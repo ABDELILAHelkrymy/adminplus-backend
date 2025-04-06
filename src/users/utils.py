@@ -11,7 +11,7 @@ def send_password_reset_email(user):
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     
     # Create reset URL
-    reset_url = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}"
+    reset_url = f"{settings.FRONTEND_URL}/authentication/reset-password/reset-password-confirm/{uid}/{token}"
     
     # Email content
     subject = 'Reset Your Password'
@@ -40,3 +40,39 @@ def send_password_reset_email(user):
     )
 
     return token
+
+def send_verification_email(user):
+    """
+    Send email verification link to user
+    """
+    token = default_token_generator.make_token(user)
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    
+    # Create verification URL
+    verify_url = f"{settings.FRONTEND_URL}/verify-email/{uid}/{token}"
+    
+    # Email content
+    subject = 'Verify Your Email Address'
+    message = f"""
+    Hello {user.first_name},
+    
+    Thank you for registering with us. Please verify your email address by clicking the link below:
+    
+    {verify_url}
+    
+    This link will expire in 24 hours.
+    
+    If you didn't register on our platform, please ignore this email.
+    
+    Best regards,
+    The Compta-Go Team
+    """
+    
+    # Send email
+    send_mail(
+        subject=subject,
+        message=message,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+        fail_silently=False,
+    )

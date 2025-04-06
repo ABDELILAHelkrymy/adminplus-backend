@@ -28,10 +28,22 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
 from django.core.mail import send_mail
 from django.conf import settings
-from .utils import send_password_reset_email
+from .utils import send_password_reset_email, send_verification_email
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+from functools import wraps
+
+def email_verification_required(view_func):
+    @wraps(view_func)
+    def _wrapped_view(request, *args, **kwargs):
+        if not request.user.is_verified:
+            return Response({
+                'status': 'error',
+                'message': 'Email verification required to access this feature'
+            }, status=status.HTTP_403_FORBIDDEN)
+        return view_func(request, *args, **kwargs)
+    return _wrapped_view
 
 @swagger_auto_schema(tags=['Roles'])
 class RoleViewSet(viewsets.ReadOnlyModelViewSet):
@@ -89,6 +101,7 @@ class LoginView(APIView):
                     'first_name': user.first_name,
                     'last_name': user.last_name,
                     'roles': [role.name for role in user.get_roles()],
+                    'is_verified': user.is_verified,
                 }
             }, status=status.HTTP_200_OK)
         
@@ -142,12 +155,15 @@ class AdminRegistrationView(APIView):
             business_account = created_data['business_account']
             settings = created_data['settings']
 
+            # Send verification email
+            send_verification_email(user)
+
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
 
             return Response({
                 'status': 'success',
-                'message': 'Admin user and business account created successfully.',
+                'message': 'Admin user created successfully. Please check your email to verify your account.',
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -157,6 +173,7 @@ class AdminRegistrationView(APIView):
                     'email': user.email,
                     'first_name': user.first_name,
                     'last_name': user.last_name,
+                    'is_verified': user.is_verified,
                     'roles': [role.name for role in user.get_roles()],
                 },
                 'business_account': {
@@ -194,11 +211,14 @@ class ExternalAccountantRegistrationView(APIView):
             user = created_data['user']
             external_accountant = created_data['external_accountant']
 
+            # Send verification email
+            send_verification_email(user)
+
             refresh = RefreshToken.for_user(user)
 
             return Response({
                 'status': 'success',
-                'message': 'External accountant account created successfully.',
+                'message': 'External accountant account created successfully. Please check your email to verify your account.',
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -208,6 +228,7 @@ class ExternalAccountantRegistrationView(APIView):
                     'email': user.email,
                     'first_name': user.first_name,
                     'last_name': user.last_name,
+                    'is_verified': user.is_verified,
                     'roles': [role.name for role in user.get_roles()],
                 },
                 'external_accountant': {
@@ -720,7 +741,7 @@ class EmailVerificationRequestView(APIView):
 
     @swagger_auto_schema(
         operation_summary="Request email verification",
-        responses={
+        responses={ 
             200: "Verification email sent",
             400: "Invalid request"
         }
@@ -737,7 +758,7 @@ class EmailVerificationRequestView(APIView):
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         
         # Send verification email
-        verify_url = f"{settings.FRONTEND_URL}/verify-email/{uid}/{token}"
+        verify_url = f"{settings.FRONTEND_URL}/authentication/email-verification/{uid}/{token}"
         send_mail(
             'Verify Your Email',
             f'Click here to verify your email: {verify_url}',
