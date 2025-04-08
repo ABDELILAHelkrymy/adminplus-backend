@@ -3,6 +3,7 @@ from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
+from twilio.rest import Client
 
 def send_password_reset_email(user):
     """Send password reset email with reset link"""
@@ -49,7 +50,7 @@ def send_verification_email(user):
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     
     # Create verification URL
-    verify_url = f"{settings.FRONTEND_URL}/verify-email/{uid}/{token}"
+    verify_url = f"{settings.FRONTEND_URL}/authentication/email-verification/EmailVerification/{uid}/{token}"
     
     # Email content
     subject = 'Verify Your Email Address'
@@ -76,3 +77,33 @@ def send_verification_email(user):
         recipient_list=[user.email],
         fail_silently=False,
     )
+
+def send_otp_via_sms(phone_number, otp):
+    """
+    Send OTP via SMS using Twilio
+    """
+    try:
+        # Initialize Twilio client
+        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        
+        # Format message
+        message_body = f"Your ComptaGo verification code is: {otp}. This code will expire in 10 minutes."
+        
+        # Send SMS
+        message = client.messages.create(
+            body=message_body,
+            from_=settings.TWILIO_PHONE_NUMBER,
+            to=phone_number
+        )
+        
+        # Return message SID on success
+        return {
+            'success': True,
+            'message_sid': message.sid
+        }
+    except Exception as e:
+        # Return error details
+        return {
+            'success': False,
+            'error': str(e)
+        }

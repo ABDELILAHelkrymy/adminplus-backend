@@ -32,7 +32,8 @@ ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
     'adminplus-backend-production.up.railway.app',
-    'http://localhost:3000'
+    'http://localhost:3000',
+    'https://comptago.vercel.app/'
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -41,7 +42,7 @@ CSRF_TRUSTED_ORIGINS = [
 
 CORS_ALLOWED_ORIGINS = [
     'https://adminplus-backend-production.up.railway.app',
-    'http://localhost:3000'
+    'http://localhost:3000',
 ]
 
 
@@ -240,3 +241,9 @@ DEFAULT_FROM_EMAIL = 'noreply@yourcompany.com'
 
 # Frontend URL for email links
 FRONTEND_URL = 'http://localhost:3000'  # Change this to your frontend URL
+
+
+# twilio settings
+TWILIO_ACCOUNT_SID = config('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = config('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER')

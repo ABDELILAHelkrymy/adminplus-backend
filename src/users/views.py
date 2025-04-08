@@ -3,7 +3,7 @@ from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Q
-from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus, ClientAccountantConnection, ConnectionAccessLevel, ConnectionActivity
+from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus, ClientAccountantConnection, ConnectionAccessLevel, ConnectionActivity, PhoneOTP
 from .serializers import (
     AccountantInvitationSerializer,
     RoleSerializer,
@@ -13,7 +13,9 @@ from .serializers import (
     EmailVerificationRequestSerializer,
     PasswordChangeSerializer,
     PasswordResetRequestSerializer,
-    PasswordResetConfirmSerializer
+    PasswordResetConfirmSerializer,
+    OTPRequestSerializer,
+    OTPVerifySerializer
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -28,7 +30,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes
 from django.core.mail import send_mail
 from django.conf import settings
-from .utils import send_password_reset_email, send_verification_email
+from .utils import send_password_reset_email, send_verification_email, send_otp_via_sms
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -733,6 +735,140 @@ class PasswordChangeView(APIView):
                 'message': 'Password changed successfully'
             })
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Authentication'])
+class OTPRequestView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = OTPRequestSerializer
+
+    @swagger_auto_schema(
+        operation_summary="Request phone verification OTP via SMS",
+        request_body=OTPRequestSerializer,
+        responses={
+            200: openapi.Response(
+                description="OTP sent successfully",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            400: "Invalid phone number",
+            500: "SMS sending failed"
+        }
+    )
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            phone_number = serializer.validated_data['phone_number']
+            user = request.user
+            
+            # Generate and save OTP
+            phone_otp = PhoneOTP.create_otp_for_user(user, phone_number)
+            
+            # Send OTP via SMS
+            sms_result = send_otp_via_sms(phone_number, phone_otp.otp)
+            
+            if sms_result['success']:
+                return Response({
+                    'status': 'success',
+                    'message': 'Verification code sent successfully to your phone'
+                })
+            else:
+                # If SMS sending failed, delete the OTP and return error
+                phone_otp.delete()
+                return Response({
+                    'status': 'error',
+                    'message': 'Failed to send verification code',
+                    'details': sms_result['error']
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+        return Response({
+            'status': 'error',
+            'message': 'Invalid phone number',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Authentication'])
+class OTPVerifyView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = OTPVerifySerializer
+
+    @swagger_auto_schema(
+        operation_summary="Verify phone number with OTP",
+        request_body=OTPVerifySerializer,
+        responses={
+            200: openapi.Response(
+                description="Phone number verified successfully",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            400: "Invalid or expired OTP",
+            404: "OTP not found"
+        }
+    )
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        if serializer.is_valid():
+            phone_number = serializer.validated_data['phone_number']
+            otp_code = serializer.validated_data['otp']
+            user = request.user
+            
+            try:
+                # Find matching OTP
+                phone_otp = PhoneOTP.objects.get(
+                    user=user,
+                    phone_number=phone_number,
+                    is_verified=False
+                )
+                
+                # Check if OTP is expired
+                if phone_otp.is_expired():
+                    # Delete expired OTP
+                    phone_otp.delete()
+                    return Response({
+                        'status': 'error',
+                        'message': 'Verification code has expired. Please request a new one.'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Verify OTP
+                if phone_otp.otp == otp_code:
+                    # Mark OTP as verified
+                    phone_otp.is_verified = True
+                    phone_otp.save()
+                    
+                    # Update user's verified phone number
+                    user.phone_number = phone_number
+                    user.save()
+                    
+                    return Response({
+                        'status': 'success',
+                        'message': 'Phone number verified successfully'
+                    })
+                else:
+                    return Response({
+                        'status': 'error',
+                        'message': 'Invalid verification code'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+            except PhoneOTP.DoesNotExist:
+                return Response({
+                    'status': 'error',
+                    'message': 'No verification code found for this phone number'
+                }, status=status.HTTP_404_NOT_FOUND)
+                
+        return Response({
+            'status': 'error',
+            'message': 'Invalid data',
+            'errors': serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
 
 @swagger_auto_schema(tags=['Authentication'])
 class EmailVerificationRequestView(APIView):

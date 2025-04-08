@@ -368,3 +368,10 @@ class EmailVerificationRequestSerializer(serializers.Serializer):
 
 class EmailVerificationConfirmSerializer(serializers.Serializer):
     token = serializers.CharField()
+
+class OTPRequestSerializer(serializers.Serializer):
+    phone_number = serializers.CharField(max_length=15)
+
+class OTPVerifySerializer(serializers.Serializer):
+    phone_number = serializers.CharField(max_length=15)
+    otp = serializers.CharField(min_length=6, max_length=6)

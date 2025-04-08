@@ -1,4 +1,5 @@
 import uuid
+import random
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.utils.translation import gettext_lazy as _
@@ -579,6 +580,48 @@ class Integration(models.Model):
         """
         self.last_sync = timezone.now()
         self.save()
+
+
+# --------------------------
+#  PHONE OTP MODEL
+# --------------------------
+class PhoneOTP(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='otps')
+    phone_number = models.CharField(max_length=15)
+    otp = models.CharField(max_length=6)
+    is_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    def __str__(self):
+        return f"OTP for {self.phone_number}"
+
+    @staticmethod
+    def generate_otp():
+        """Generate a 6-digit OTP code"""
+        return ''.join([str(random.randint(0, 9)) for _ in range(6)])
+
+    @classmethod
+    def create_otp_for_user(cls, user, phone_number):
+        """Create a new OTP for the given user and phone number"""
+        # Delete any existing OTPs for this user
+        cls.objects.filter(user=user, phone_number=phone_number).delete()
+        
+        otp = cls.generate_otp()
+        expires_at = timezone.now() + timezone.timedelta(minutes=10)
+        
+        phone_otp = cls.objects.create(
+            user=user,
+            phone_number=phone_number,
+            otp=otp,
+            expires_at=expires_at
+        )
+        return phone_otp
+
+    def is_expired(self):
+        """Check if the OTP has expired"""
+        return timezone.now() > self.expires_at
 
 
 # --------------------------
