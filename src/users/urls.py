@@ -3,7 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     RoleViewSet, CustomTokenRefreshView, LoginView, AdminRegistrationView, ExternalAccountantRegistrationView, AccountSettingsViewSet, InternalUserViewSet,
     AccountantInvitationViewSet, ClientAccountantConnectionViewSet, PasswordResetRequestView, PasswordResetConfirmView, PasswordChangeView,
-    EmailVerificationRequestView, EmailVerificationConfirmView, OTPRequestView, OTPVerifyView
+    EmailVerificationRequestView, EmailVerificationConfirmView, OTPRequestView, OTPVerifyView, BusinessAccountInfoView
 )
 
 router = DefaultRouter()
@@ -26,4 +26,5 @@ urlpatterns = [
     path('email/verify/<str:uidb64>/<str:token>/', EmailVerificationConfirmView.as_view(), name='email_verification_confirm'),
     path('phone/verify/request/', OTPRequestView.as_view(), name='phone_verification_request'),
     path('phone/verify/confirm/', OTPVerifyView.as_view(), name='phone_verification_confirm'),
+    path('business/info/', BusinessAccountInfoView.as_view(), name='business_info'),
 ]

@@ -3,7 +3,7 @@ from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Q
-from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus, ClientAccountantConnection, ConnectionAccessLevel, ConnectionActivity, PhoneOTP
+from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus, ClientAccountantConnection, ConnectionAccessLevel, ConnectionActivity, PhoneOTP, SystemRole, UserRole, AccountSettings
 from .serializers import (
     AccountantInvitationSerializer,
     RoleSerializer,
@@ -381,6 +381,27 @@ class AccountantInvitationViewSet(viewsets.ModelViewSet):
         }
     )
     def create(self, request, *args, **kwargs):
+        # Extract accountant email from request data
+        accountant_email = request.data.get('accountant_email')
+        
+        # Check if invitation already exists
+        existing_invitation = None
+        if hasattr(request.user, 'owned_business') and accountant_email:
+            existing_invitation = AccountantInvitation.objects.filter(
+                sender=request.user.owned_business,
+                accountant_email=accountant_email,
+                status=InvitationStatus.PENDING
+            ).first()
+        
+        if existing_invitation:
+            serializer = self.get_serializer(existing_invitation)
+            return Response({
+                'status': 'info',
+                'message': 'An invitation has already been sent to this accountant',
+                'invitation': serializer.data
+            }, status=status.HTTP_200_OK)
+        
+        # If no existing invitation, create a new one
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
@@ -388,10 +409,11 @@ class AccountantInvitationViewSet(viewsets.ModelViewSet):
         # Here you might want to send an email to the accountant
         # send_invitation_email(invitation)
         
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED
-        )
+        return Response({
+            'status': 'success',
+            'message': 'Invitation sent successfully',
+            'invitation': serializer.data
+        }, status=status.HTTP_201_CREATED)
 
     @swagger_auto_schema(
         operation_summary="Accept invitation",
@@ -937,3 +959,63 @@ class EmailVerificationConfirmView(APIView):
             'status': 'error',
             'message': 'Invalid verification link'
         }, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Business'])
+class BusinessAccountInfoView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    @swagger_auto_schema(
+        operation_summary="Get business account info",
+        responses={
+            200: openapi.Response(
+                description="Business account information",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'business_account': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        'settings': openapi.Schema(type=openapi.TYPE_OBJECT),
+                    }
+                )
+            ),
+            403: "Permission denied",
+            404: "Business account not found"
+        }
+    )
+    def get(self, request):
+        # Check if user has admin role
+        admin_role = Role.objects.get(name=SystemRole.ADMIN)
+        is_admin = UserRole.objects.filter(user=request.user, role=admin_role).exists()
+        
+        if not is_admin:
+            return Response({
+                'status': 'error',
+                'message': 'Only admin users can access business information'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            business_account = request.user.owned_business
+            settings = AccountSettings.objects.get(business_account=business_account)
+            
+            return Response({
+                'status': 'success',
+                'business_account': {
+                    'id': str(business_account.id),
+                    'business_name': business_account.business_name,
+                    'tax_number': business_account.tax_number,
+                    'business_address': business_account.business_address,
+                    'phone_number': business_account.phone_number,
+                    'website': business_account.website,
+                },
+                'settings': {
+                    'currency': settings.currency,
+                    'language': settings.language,
+                    'notification_emails': settings.notification_emails,
+                    'two_factor_auth': settings.two_factor_auth,
+                }
+            })
+        except (AttributeError, AccountSettings.DoesNotExist):
+            return Response({
+                'status': 'error',
+                'message': 'Business account not found'
+            }, status=status.HTTP_404_NOT_FOUND)
