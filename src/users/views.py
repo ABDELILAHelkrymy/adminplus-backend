@@ -3,7 +3,7 @@ from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Q
-from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus, ClientAccountantConnection, ConnectionAccessLevel, ConnectionActivity, PhoneOTP
+from .models import AccountantInvitation, User, Role, ExternalAccountantAccount, InvitationStatus, ClientAccountantConnection, ConnectionAccessLevel, ConnectionActivity, PhoneOTP, SystemRole, UserRole, AccountSettings
 from .serializers import (
     AccountantInvitationSerializer,
     RoleSerializer,
@@ -46,6 +46,65 @@ def email_verification_required(view_func):
             }, status=status.HTTP_403_FORBIDDEN)
         return view_func(request, *args, **kwargs)
     return _wrapped_view
+
+@swagger_auto_schema(tags=['users'])
+class SystemRoleListView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessOwner]
+    
+    @swagger_auto_schema(
+        operation_summary="Get available system roles for internal users",
+        responses={
+            200: openapi.Response(
+                description="List of available system roles for internal users",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'system_roles': openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    'id': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'display_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'description': openapi.Schema(type=openapi.TYPE_STRING),
+                                }
+                            )
+                        )
+                    }
+                )
+            ),
+            403: "Permission denied"
+        }
+    )
+    def get(self, request):
+        # Return only system roles applicable for internal users
+        system_roles = [
+            {
+                'id': SystemRole.INTERNAL_ACCOUNTANT,
+                'name': SystemRole.INTERNAL_ACCOUNTANT,
+                'display_name': 'Internal Accountant',
+                'description': 'Company accountant with access to financial records'
+            },
+            {
+                'id': SystemRole.EMPLOYEE,
+                'name': SystemRole.EMPLOYEE,
+                'display_name': 'Employee',
+                'description': 'Regular employee with standard access rights'
+            },
+            {
+                'id': SystemRole.VIEWER,
+                'name': SystemRole.VIEWER,
+                'display_name': 'Viewer',
+                'description': 'Read-only access to permitted areas'
+            }
+        ]
+        
+        return Response({
+            'status': 'success',
+            'system_roles': system_roles
+        })
 
 @swagger_auto_schema(tags=['Roles'])
 class RoleViewSet(viewsets.ReadOnlyModelViewSet):
@@ -275,7 +334,7 @@ class AccountSettingsViewSet(viewsets.ViewSet):
     def get_serializer(self, *args, **kwargs):
         return self.serializer_class(*args, **kwargs)
 
-@swagger_auto_schema(tags=['Users'])
+@swagger_auto_schema(tags=['users'])
 class InternalUserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     permission_classes = [IsAuthenticated, IsBusinessOwner]
@@ -292,7 +351,7 @@ class InternalUserViewSet(viewsets.ModelViewSet):
         return User.objects.none()
 
     @swagger_auto_schema(
-        tags=['Users'],
+        tags=['users'],
         operation_summary="Create internal user",
         operation_description="Create a new internal user (Internal Accountant, Employee, or Viewer)",
         request_body=InternalUserCreateSerializer,
@@ -310,18 +369,29 @@ class InternalUserViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         
-        response_serializer = UserSerializer(user)
+        # Get user roles for response
+        user_roles = [role.name for role in user.get_roles()]
+        user_system_roles = [user_role.system_role for user_role in user.user_roles.all()]        
         return Response(
             {
                 'status': 'success',
                 'message': 'User created successfully',
-                'user': response_serializer.data
+                'user': {
+                    'id': str(user.id),
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'phone_number': user.phone_number,
+                    'is_verified': user.is_verified,
+                    'roles': user_roles,
+                    'system_roles': user_system_roles
+                }
             }, 
             status=status.HTTP_201_CREATED
         )
 
     @swagger_auto_schema(
-        tags=['Users'],
+        tags=['users'],
         operation_summary="List internal users",
         operation_description="List all internal users for the current business account",
         responses={
@@ -335,7 +405,7 @@ class InternalUserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @swagger_auto_schema(
-        tags=['Users'],
+        tags=['users'],
         operation_summary="Delete internal user",
         operation_description="Remove an internal user from the business account",
         responses={
@@ -381,6 +451,27 @@ class AccountantInvitationViewSet(viewsets.ModelViewSet):
         }
     )
     def create(self, request, *args, **kwargs):
+        # Extract accountant email from request data
+        accountant_email = request.data.get('accountant_email')
+        
+        # Check if invitation already exists
+        existing_invitation = None
+        if hasattr(request.user, 'owned_business') and accountant_email:
+            existing_invitation = AccountantInvitation.objects.filter(
+                sender=request.user.owned_business,
+                accountant_email=accountant_email,
+                status=InvitationStatus.PENDING
+            ).first()
+        
+        if existing_invitation:
+            serializer = self.get_serializer(existing_invitation)
+            return Response({
+                'status': 'info',
+                'message': 'An invitation has already been sent to this accountant',
+                'invitation': serializer.data
+            }, status=status.HTTP_200_OK)
+        
+        # If no existing invitation, create a new one
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
@@ -388,10 +479,11 @@ class AccountantInvitationViewSet(viewsets.ModelViewSet):
         # Here you might want to send an email to the accountant
         # send_invitation_email(invitation)
         
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED
-        )
+        return Response({
+            'status': 'success',
+            'message': 'Invitation sent successfully',
+            'invitation': serializer.data
+        }, status=status.HTTP_201_CREATED)
 
     @swagger_auto_schema(
         operation_summary="Accept invitation",
@@ -937,3 +1029,63 @@ class EmailVerificationConfirmView(APIView):
             'status': 'error',
             'message': 'Invalid verification link'
         }, status=status.HTTP_400_BAD_REQUEST)
+
+@swagger_auto_schema(tags=['Business'])
+class BusinessAccountInfoView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    @swagger_auto_schema(
+        operation_summary="Get business account info",
+        responses={
+            200: openapi.Response(
+                description="Business account information",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'business_account': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        'settings': openapi.Schema(type=openapi.TYPE_OBJECT),
+                    }
+                )
+            ),
+            403: "Permission denied",
+            404: "Business account not found"
+        }
+    )
+    def get(self, request):
+        # Check if user has admin role
+        admin_role = Role.objects.get(name=SystemRole.ADMIN)
+        is_admin = UserRole.objects.filter(user=request.user, role=admin_role).exists()
+        
+        if not is_admin:
+            return Response({
+                'status': 'error',
+                'message': 'Only admin users can access business information'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            business_account = request.user.owned_business
+            settings = AccountSettings.objects.get(business_account=business_account)
+            
+            return Response({
+                'status': 'success',
+                'business_account': {
+                    'id': str(business_account.id),
+                    'business_name': business_account.business_name,
+                    'tax_number': business_account.tax_number,
+                    'business_address': business_account.business_address,
+                    'phone_number': business_account.phone_number,
+                    'website': business_account.website,
+                },
+                'settings': {
+                    'currency': settings.currency,
+                    'language': settings.language,
+                    'notification_emails': settings.notification_emails,
+                    'two_factor_auth': settings.two_factor_auth,
+                }
+            })
+        except (AttributeError, AccountSettings.DoesNotExist):
+            return Response({
+                'status': 'error',
+                'message': 'Business account not found'
+            }, status=status.HTTP_404_NOT_FOUND)
