@@ -3,13 +3,13 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     RoleViewSet, CustomTokenRefreshView, LoginView, AdminRegistrationView, ExternalAccountantRegistrationView, AccountSettingsViewSet, InternalUserViewSet,
     AccountantInvitationViewSet, ClientAccountantConnectionViewSet, PasswordResetRequestView, PasswordResetConfirmView, PasswordChangeView,
-    EmailVerificationRequestView, EmailVerificationConfirmView, OTPRequestView, OTPVerifyView, BusinessAccountInfoView
+    EmailVerificationRequestView, EmailVerificationConfirmView, OTPRequestView, OTPVerifyView, BusinessAccountInfoView, SystemRoleListView
 )
 
 router = DefaultRouter()
 router.register(r'roles', RoleViewSet, basename='role')
 router.register(r'account-settings', AccountSettingsViewSet, basename='account-settings')
-router.register(r'Users', InternalUserViewSet, basename='internal-user')
+router.register(r'users', InternalUserViewSet, basename='internal-user')
 router.register(r'accountant-invitations', AccountantInvitationViewSet, basename='accountant-invitation')
 router.register(r'connections', ClientAccountantConnectionViewSet, basename='connection')
 
@@ -17,6 +17,7 @@ urlpatterns = [
     path('', include(router.urls)),
     path('login/', LoginView.as_view(), name='login'),
     path('token/refresh/', CustomTokenRefreshView.as_view(), name='token_refresh'),
+    path('system-roles/', SystemRoleListView.as_view(), name='system-roles'),
     path('register/client/', AdminRegistrationView.as_view(), name='register'),
     path('register/accountant/', ExternalAccountantRegistrationView.as_view(), name='register_accountant'),
     path('password/reset/', PasswordResetRequestView.as_view(), name='password_reset_request'),

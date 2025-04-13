@@ -47,6 +47,65 @@ def email_verification_required(view_func):
         return view_func(request, *args, **kwargs)
     return _wrapped_view
 
+@swagger_auto_schema(tags=['users'])
+class SystemRoleListView(APIView):
+    permission_classes = [IsAuthenticated, IsBusinessOwner]
+    
+    @swagger_auto_schema(
+        operation_summary="Get available system roles for internal users",
+        responses={
+            200: openapi.Response(
+                description="List of available system roles for internal users",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'system_roles': openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    'id': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'display_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'description': openapi.Schema(type=openapi.TYPE_STRING),
+                                }
+                            )
+                        )
+                    }
+                )
+            ),
+            403: "Permission denied"
+        }
+    )
+    def get(self, request):
+        # Return only system roles applicable for internal users
+        system_roles = [
+            {
+                'id': SystemRole.INTERNAL_ACCOUNTANT,
+                'name': SystemRole.INTERNAL_ACCOUNTANT,
+                'display_name': 'Internal Accountant',
+                'description': 'Company accountant with access to financial records'
+            },
+            {
+                'id': SystemRole.EMPLOYEE,
+                'name': SystemRole.EMPLOYEE,
+                'display_name': 'Employee',
+                'description': 'Regular employee with standard access rights'
+            },
+            {
+                'id': SystemRole.VIEWER,
+                'name': SystemRole.VIEWER,
+                'display_name': 'Viewer',
+                'description': 'Read-only access to permitted areas'
+            }
+        ]
+        
+        return Response({
+            'status': 'success',
+            'system_roles': system_roles
+        })
+
 @swagger_auto_schema(tags=['Roles'])
 class RoleViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Role.objects.all()
@@ -275,7 +334,7 @@ class AccountSettingsViewSet(viewsets.ViewSet):
     def get_serializer(self, *args, **kwargs):
         return self.serializer_class(*args, **kwargs)
 
-@swagger_auto_schema(tags=['Users'])
+@swagger_auto_schema(tags=['users'])
 class InternalUserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     permission_classes = [IsAuthenticated, IsBusinessOwner]
@@ -292,7 +351,7 @@ class InternalUserViewSet(viewsets.ModelViewSet):
         return User.objects.none()
 
     @swagger_auto_schema(
-        tags=['Users'],
+        tags=['users'],
         operation_summary="Create internal user",
         operation_description="Create a new internal user (Internal Accountant, Employee, or Viewer)",
         request_body=InternalUserCreateSerializer,
@@ -310,18 +369,29 @@ class InternalUserViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         
-        response_serializer = UserSerializer(user)
+        # Get user roles for response
+        user_roles = [role.name for role in user.get_roles()]
+        user_system_roles = [user_role.system_role for user_role in user.user_roles.all()]        
         return Response(
             {
                 'status': 'success',
                 'message': 'User created successfully',
-                'user': response_serializer.data
+                'user': {
+                    'id': str(user.id),
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'phone_number': user.phone_number,
+                    'is_verified': user.is_verified,
+                    'roles': user_roles,
+                    'system_roles': user_system_roles
+                }
             }, 
             status=status.HTTP_201_CREATED
         )
 
     @swagger_auto_schema(
-        tags=['Users'],
+        tags=['users'],
         operation_summary="List internal users",
         operation_description="List all internal users for the current business account",
         responses={
@@ -335,7 +405,7 @@ class InternalUserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @swagger_auto_schema(
-        tags=['Users'],
+        tags=['users'],
         operation_summary="Delete internal user",
         operation_description="Remove an internal user from the business account",
         responses={

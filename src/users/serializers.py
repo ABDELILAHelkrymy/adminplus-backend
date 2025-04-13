@@ -1,7 +1,7 @@
 # serializers.py
 from rest_framework import serializers
 from .models import User, Role, SystemRole, UserRole, BusinessAccount, ExternalAccountantAccount, AccountSettings, AccountantInvitation, DataSharingPreference, ClientAccountantConnection
-from django.db import transaction
+from django.db import transaction, models
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.password_validation import validate_password
@@ -18,10 +18,34 @@ class RoleSerializer(serializers.ModelSerializer):
         fields = ('id', 'name')
 
 class UserSerializer(serializers.ModelSerializer):
+    roles = serializers.SerializerMethodField()
+    system_roles = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name', 'is_active')
-
+        fields = ('id', 'email', 'first_name', 'last_name', 'is_active', 'roles', 'system_roles', 'created_at')
+    
+    def get_roles(self, obj):
+        return [role.name for role in obj.get_roles()]
+    
+    def get_system_roles(self, obj):
+    # Dictionary to map system roles to their display names
+        display_names = {
+            SystemRole.ADMIN: "Administrator",
+            SystemRole.INTERNAL_ACCOUNTANT: "Internal Accountant",
+            SystemRole.EXTERNAL_ACCOUNTANT: "External Accountant",
+            SystemRole.EMPLOYEE: "Employee",
+            SystemRole.VIEWER: "Viewer"
+        }
+        
+        return [
+            {
+                "name": user_role.system_role,
+                "displayName": display_names.get(user_role.system_role, user_role.system_role.title())
+            } 
+            for user_role in obj.user_roles.all()
+        ]
+    
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -204,11 +228,45 @@ class InternalUserCreateSerializer(serializers.Serializer):
         (SystemRole.EMPLOYEE, 'Employee'),
         (SystemRole.VIEWER, 'Viewer'),
     ])
-    role = serializers.PrimaryKeyRelatedField(queryset=Role.objects.all(), write_only=True)
-
+    
     def create(self, validated_data):
         # Extract and remove system_role from validated_data
         system_role = validated_data.pop('system_role')
+        
+        # Automatically determine the appropriate role based on system_role
+        role_mapping = {
+            SystemRole.INTERNAL_ACCOUNTANT: 'accountant',  # Role name for internal accountants
+            SystemRole.EMPLOYEE: 'employee',               # Role name for employees
+            SystemRole.VIEWER: 'viewer',                   # Role name for viewers
+        }
+        
+        # Get the appropriate role from the database
+        try:
+            role = Role.objects.get(name=role_mapping.get(system_role))
+        except Role.DoesNotExist:
+            # Fallback to default roles if specific ones aren't found
+            if system_role == SystemRole.INTERNAL_ACCOUNTANT:
+                role = Role.objects.filter(
+                    models.Q(name__icontains='accountant') | 
+                    models.Q(name__icontains='finance')
+                ).first()
+            elif system_role == SystemRole.VIEWER:
+                role = Role.objects.filter(
+                    models.Q(name__icontains='viewer') | 
+                    models.Q(name__icontains='read')
+                ).first()
+            else:  # Employee or fallback
+                role = Role.objects.filter(
+                    models.Q(name__icontains='employee') | 
+                    models.Q(name__icontains='staff')
+                ).first()
+                
+            # If still no role found, use the first non-admin role
+            if not role:
+                role = Role.objects.exclude(name=SystemRole.ADMIN).first()
+                
+            if not role:
+                raise serializers.ValidationError("No appropriate role found in the system")
         
         # Create user
         user = User.objects.create_user(
@@ -225,7 +283,7 @@ class InternalUserCreateSerializer(serializers.Serializer):
         # Assign role to user
         UserRole.objects.create(
             user=user,
-            role=validated_data['role'],
+            role=role,
             system_role=system_role
         )
 
