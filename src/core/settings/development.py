@@ -35,6 +35,16 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+# # Use PostgreSQL in production
+# CONN_MAX_AGE = config('CONN_MAX_AGE', default=600, cast=int)
+# DATABASE_URL = config('DATABASE_URL', default='', cast=str)
+# if DATABASE_URL:
+#     import dj_database_url
+#     DATABASES['default'] = dj_database_url.config(
+#         default=DATABASE_URL,
+#         conn_health_checks=True,
+#         conn_max_age=CONN_MAX_AGE,
+#     )
 
 # Email
 # Uncomment the line below to log emails to the console instead of sending them

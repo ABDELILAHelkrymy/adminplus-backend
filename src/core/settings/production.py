@@ -9,12 +9,12 @@ DEBUG = config('DJANGO_DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = [
     'adminplus-backend-production.up.railway.app',
-    'https://comptago.vercel.app/'
+    'comptago.vercel.app'
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    'https://adminplus-backend-production.up.railway.app/',
-    'https://comptago.vercel.app/',
+    'https://adminplus-backend-production.up.railway.app',
+    'https://comptago.vercel.app',
 ]
 
 CORS_ALLOWED_ORIGINS = [
@@ -45,12 +45,16 @@ if DATABASE_URL:
     )
 
 # Security settings
-SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=True, cast=bool)
+SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=False, cast=bool)
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_HSTS_SECONDS = 31536000  # 1 year
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
+
+# This helps Django determine if it's behind a proxy that terminates SSL
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
 
 # Email
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
