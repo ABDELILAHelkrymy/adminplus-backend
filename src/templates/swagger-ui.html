@@ -1,0 +1,153 @@
+{% extends 'drf-yasg/swagger-ui.html' %} {% block extra_styles %}
+<style>
+  /* Hide duplicate paths - this is the key change */
+  .swagger-ui .opblock-tag-section:first-of-type {
+    display: none;
+  }
+
+  /* Only display endpoints grouped by tags */
+  .swagger-ui .opblock-tag {
+    margin: 0 0 10px;
+  }
+
+  /* Improve tag styling */
+  .swagger-ui .opblock-tag-section {
+    margin-bottom: 20px;
+  }
+
+  /* Custom styling for better readability */
+  .swagger-ui .opblock {
+    margin: 0 0 8px;
+    border-radius: 4px;
+  }
+
+  /* Make it clearer which section you're in */
+  .swagger-ui .opblock-tag {
+    font-size: 18px;
+    font-weight: bold;
+    padding: 10px 20px;
+    background-color: #f7f7f7;
+    border-radius: 4px;
+  }
+</style>
+{% endblock %} {% block extra_scripts %}
+<script>
+  window.onload = function () {
+    const ui = document.getElementsByClassName("swagger-ui")[0];
+    const authBtn = document.querySelector(".authorize");
+
+    // Custom function to handle login
+    function handleLogin() {
+      const email = document.getElementById("auth-email").value;
+      const password = document.getElementById("auth-password").value;
+
+      fetch("/swagger-auth/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username: email,
+          password: password,
+        }),
+      })
+        .then((response) => {
+          if (!response.ok) {
+            throw new Error("Login failed");
+          }
+          return response.json();
+        })
+        .then((data) => {
+          if (data.token) {
+            // Update the Swagger UI with the token
+            const jwtToken = data.token;
+            const authorizationValue = `Bearer ${jwtToken}`;
+
+            // Update the UI and store the token
+            ui.preauthorizeApiKey("Bearer", authorizationValue);
+            localStorage.setItem("swagger_token", authorizationValue);
+
+            // Close the auth dialog
+            document.querySelector(".auth-btn-wrapper button.btn-done").click();
+
+            // Reload to apply token to all requests
+            setTimeout(() => {
+              window.location.reload();
+            }, 1000);
+          }
+        })
+        .catch((error) => {
+          alert("Authentication failed: " + error.message);
+        });
+    }
+
+    // Add event listener to the auth button
+    if (authBtn) {
+      authBtn.addEventListener("click", function () {
+        // Wait for the auth dialog to appear
+        setTimeout(() => {
+          const authContainer = document.querySelector(".auth-container");
+
+          if (authContainer) {
+            // Create custom login form
+            const loginForm = document.createElement("div");
+            loginForm.className = "custom-login-form";
+            loginForm.innerHTML = `
+              <h3>Login to get JWT token</h3>
+              <div style="margin-bottom: 10px;">
+                <label for="auth-email">Email:</label>
+                <input type="email" id="auth-email" class="auth-email-input" style="width: 100%; padding: 5px;">
+              </div>
+              <div style="margin-bottom: 10px;">
+                <label for="auth-password">Password:</label>
+                <input type="password" id="auth-password" class="auth-password-input" style="width: 100%; padding: 5px;">
+              </div>
+              <button id="login-button" class="btn authorize" style="background-color: #49cc90; color: white; border: none; padding: 5px 10px; cursor: pointer;">Login</button>
+            `;
+
+            // Insert the login form before the traditional auth inputs
+            const authWrapper = document.querySelector(".auth-btn-wrapper");
+            if (authWrapper) {
+              authWrapper.parentNode.insertBefore(loginForm, authWrapper);
+
+              // Add event listener to the login button
+              document
+                .getElementById("login-button")
+                .addEventListener("click", handleLogin);
+            }
+          }
+        }, 300);
+      });
+    }
+
+    // Check if token exists in localStorage and apply it
+    const savedToken = localStorage.getItem("swagger_token");
+    if (savedToken) {
+      setTimeout(() => {
+        ui.preauthorizeApiKey("Bearer", savedToken);
+      }, 500);
+    }
+
+    // Custom script to fix the duplicate endpoints issue by hiding the pathlist section
+    setTimeout(() => {
+      // Hide the operations with global tag
+      const operationTags = document.querySelectorAll(".opblock-tag");
+      if (operationTags.length > 0) {
+        // The first tag usually contains all duplicated endpoints in flat structure
+        // We're keeping the tag-based structure only
+        const pathList = operationTags[0].closest(".opblock-tag-section");
+        if (pathList) {
+          pathList.style.display = "none";
+        }
+      }
+
+      // Set all tags to expanded by default
+      document.querySelectorAll(".opblock-tag").forEach((tag) => {
+        if (!tag.classList.contains("is-open")) {
+          tag.click();
+        }
+      });
+    }, 1000);
+  };
+</script>
+{% endblock %}
