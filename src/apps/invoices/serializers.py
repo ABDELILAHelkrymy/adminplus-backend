@@ -85,6 +85,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     project_name = serializers.SerializerMethodField()
     payment_method_name = serializers.SerializerMethodField()
     invoice_type_display = serializers.CharField(source='get_invoice_type_display', read_only=True)
+    supplier_details = SupplierSerializer(source='supplier', read_only=True)
+    customer_details = CustomerSerializer(source='customer', read_only=True)
     
     class Meta:
         model = Invoice
@@ -119,6 +121,11 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
     line_items = InvoiceLineItemSerializer(many=True, read_only=True)
     attachments = InvoiceAttachmentSerializer(many=True, read_only=True)
     email_logs = InvoiceEmailLogSerializer(many=True, read_only=True)
+    supplier_details = SupplierSerializer(source='supplier', read_only=True)
+    customer_details = CustomerSerializer(source='customer', read_only=True)
+    category_details = CategorySerializer(source='category', read_only=True)
+    project_details = ProjectSerializer(source='project', read_only=True)
+    payment_method_details = PaymentMethodSerializer(source='payment_method', read_only=True)
     
     class Meta:
         model = Invoice
@@ -176,4 +183,4 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
             # Recalculate totals
             instance.calculate_totals()
         
-        return instance 
+        return instance
