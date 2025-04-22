@@ -73,7 +73,7 @@ class InvoiceAdmin(admin.ModelAdmin):
             'fields': ('category', 'project')
         }),
         ('Payment Information', {
-            'fields': ('is_paid', 'paid_date', 'payment_method', 'payment_communication', 'currency')
+            'fields': ('is_paid', 'paid_date', 'payment_method', 'currency')
         }),
         ('Financial Information', {
             'fields': ('vat_rate', 'subtotal', 'vat_amount', 'total')

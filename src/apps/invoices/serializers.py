@@ -151,6 +151,10 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
         """Create invoice with line items"""
         line_items_data = self.context['request'].data.get('line_items', [])
         
+        # Set invoice type if specified
+        if 'invoice_type' not in validated_data and self.context['request'].query_params.get('invoice_type'):
+            validated_data['invoice_type'] = self.context['request'].query_params.get('invoice_type')
+        
         # Create the invoice
         invoice = Invoice.objects.create(**validated_data)
         
@@ -160,6 +164,11 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
         
         # Calculate totals
         invoice.calculate_totals()
+        
+        # Set the original document if provided in request
+        if 'original_document' in self.context['request'].FILES:
+            invoice.original_document = self.context['request'].FILES['original_document']
+            invoice.save()
         
         return invoice
     
@@ -183,4 +192,9 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
             # Recalculate totals
             instance.calculate_totals()
         
+        # Update the original document if provided
+        if 'original_document' in self.context['request'].FILES:
+            instance.original_document = self.context['request'].FILES['original_document']
+            instance.save()
+            
         return instance
