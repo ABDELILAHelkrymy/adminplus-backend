@@ -388,12 +388,26 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         ),
         responses={200: openapi.Response("Extracted data from expenditure invoice")},
     )
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], url_path='parse-expenditure-invoice')
     def parse_expenditure_invoice(self, request):
         """
         Extract data from uploaded expenditure invoice file specifically for expenditure invoices
         """
         try:
+            # Check if Tesseract is installed
+            try:
+                import pytesseract
+                pytesseract.get_tesseract_version()
+            except (ImportError, pytesseract.TesseractNotFoundError):
+                return Response({
+                    "error": "Tesseract OCR is not installed or not in your PATH. Please install Tesseract OCR and make sure it's in your PATH.",
+                    "installation_instructions": {
+                        "windows": "1. Download and install Tesseract from https://github.com/UB-Mannheim/tesseract/wiki\n2. Add the Tesseract installation directory to your PATH environment variable",
+                        "linux": "sudo apt-get install tesseract-ocr",
+                        "mac": "brew install tesseract"
+                    }
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
             if 'file' not in request.FILES:
                 return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -402,14 +416,25 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             # Extract text based on file type
             if file_extension == 'pdf':
-                # Convert PDF to images
-                images = convert_from_bytes(invoice_file.read())
-                text = ""
-                for img in images:
-                    img_byte_array = io.BytesIO()
-                    img.save(img_byte_array, format='PNG')
-                    img_byte_array.seek(0)
-                    text += pytesseract.image_to_string(Image.open(img_byte_array))
+                try:
+                    # Convert PDF to images
+                    images = convert_from_bytes(invoice_file.read())
+                    text = ""
+                    for img in images:
+                        img_byte_array = io.BytesIO()
+                        img.save(img_byte_array, format='PNG')
+                        img_byte_array.seek(0)
+                        text += pytesseract.image_to_string(Image.open(img_byte_array))
+                except Exception as e:
+                    # If pdf2image fails, we might need poppler
+                    return Response({
+                        "error": f"Error processing PDF file: {str(e)}",
+                        "installation_instructions": {
+                            "windows": "1. Download and install Poppler from https://github.com/oschwartz10612/poppler-windows/releases\n2. Add the Poppler bin directory to your PATH environment variable",
+                            "linux": "sudo apt-get install poppler-utils",
+                            "mac": "brew install poppler"
+                        }
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             elif file_extension in ['jpg', 'jpeg', 'png']:
                 text = pytesseract.image_to_string(Image.open(invoice_file))
             else:
@@ -439,7 +464,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             print(traceback.format_exc())
             return Response(
-                {"error": f"Failed to parse expenditure invoice: {str(e)}"},
+                {"error": f"Failed to parse expenditure invoice: {str(e)}",
+                 "possible_solution": "If the error is related to Tesseract, please install it and ensure it's in your PATH."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

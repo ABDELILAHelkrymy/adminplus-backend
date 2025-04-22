@@ -31,6 +31,4 @@ invoices_router.register(r'attachments', InvoiceAttachmentViewSet, basename='inv
 urlpatterns = [
     path('', include(router.urls)),
     path('', include(invoices_router.urls)),
-    # Add a direct path for parsing expenditure invoices for easier frontend access
-    path('parse-expenditure-invoice/', InvoiceViewSet.as_view({'post': 'parse_expenditure_invoice'}), name='parse-expenditure-invoice'),
 ] 
