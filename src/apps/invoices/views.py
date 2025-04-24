@@ -686,3 +686,12 @@ class InvoiceAttachmentViewSet(viewsets.ModelViewSet):
         invoice_id = self.kwargs.get('invoice_pk')
         invoice = Invoice.objects.get(id=invoice_id)
         serializer.save(invoice=invoice)
+
+try:
+    from pdf2image import convert_from_bytes
+    # Test if poppler is installed
+    test_pdf_bytes = b"%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/MediaBox[0 0 3 3]>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000010 00000 n\n0000000053 00000 n\n0000000102 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n149\n%EOF"
+    convert_from_bytes(test_pdf_bytes, size=1)
+except Exception as e:
+    # Handle Poppler not installed/configured properly
+    poppler_error = str(e)
