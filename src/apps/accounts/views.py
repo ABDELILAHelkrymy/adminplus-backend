@@ -15,7 +15,7 @@ import logging
 from .models import BusinessAccount, AccountSettings
 from .serializers import (
     AccountSettingsSerializer,
-    BusinessAccountMinimalSerializer,
+    BusinessAccountSerializer,
     AdminRegistrationSerializer
 )
 from apps.users.permissions import IsBusinessOwner
@@ -176,8 +176,8 @@ class BusinessAccountInfoView(APIView):
                     type=openapi.TYPE_OBJECT,
                     properties={
                         'status': openapi.Schema(type=openapi.TYPE_STRING),
-                        'business_account': openapi.Schema(type=openapi.TYPE_OBJECT),
-                        'settings': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        'business_account': BusinessAccountSerializer,
+                        'settings': AccountSettingsSerializer,
                     }
                 )
             ),
@@ -202,25 +202,13 @@ class BusinessAccountInfoView(APIView):
                         'status': 'error',
                         'message': 'You do not have access to any business account.'
                     }, status=status.HTTP_403_FORBIDDEN)
-            
-            settings = AccountSettings.objects.get(business_account=business_account)
+                        
+            # Use serializers to format the response data
+            business_serializer = BusinessAccountSerializer(business_account)
             
             return Response({
                 'status': 'success',
-                'business_account': {
-                    'id': str(business_account.id),
-                    'business_name': business_account.business_name,
-                    'tax_number': business_account.tax_number,
-                    'business_address': business_account.business_address,
-                    'phone_number': business_account.phone_number,
-                    'website': business_account.website,
-                },
-                'settings': {
-                    'currency': settings.currency,
-                    'language': settings.language,
-                    'notification_emails': settings.notification_emails,
-                    'two_factor_auth': settings.two_factor_auth,
-                }
+                'business_account': business_serializer.data,
             })
         except (BusinessAccount.DoesNotExist, AccountSettings.DoesNotExist):
             return Response({
