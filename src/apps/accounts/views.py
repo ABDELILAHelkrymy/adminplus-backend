@@ -22,6 +22,7 @@ from apps.users.permissions import IsBusinessOwner
 from apps.users.models import User, Role, SystemRole, UserRole
 from apps.users.serializers import UserSerializer
 from apps.users.utils import send_verification_email
+from core.swagger_utils import get_serializer_schema
 
 # Set up logger
 email_logger = logging.getLogger('apps.email')
@@ -133,8 +134,8 @@ class AccountSettingsViewSet(viewsets.ViewSet):
     @swagger_auto_schema(
         operation_id="account_settings_list",
         responses={
-            200: AccountSettingsSerializer,
-            400: openapi.Response('Invalid data provided.', AccountSettingsSerializer),
+            200: get_serializer_schema(AccountSettingsSerializer),
+            400: openapi.Response('Invalid data provided.', get_serializer_schema(AccountSettingsSerializer)),
         }
     )
     def list(self, request):
@@ -176,8 +177,8 @@ class BusinessAccountInfoView(APIView):
                     type=openapi.TYPE_OBJECT,
                     properties={
                         'status': openapi.Schema(type=openapi.TYPE_STRING),
-                        'business_account': BusinessAccountSerializer,
-                        'settings': AccountSettingsSerializer,
+                        'business_account': get_serializer_schema(BusinessAccountSerializer),
+                        'settings': get_serializer_schema(AccountSettingsSerializer),
                     }
                 )
             ),
