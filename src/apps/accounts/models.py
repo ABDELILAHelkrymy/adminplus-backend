@@ -14,6 +14,20 @@ class BusinessAccount(BaseModel):
     business_address = models.TextField(blank=True, null=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True)
     website = models.URLField(blank=True, null=True)
+
+    ice_number = models.CharField(max_length=50, blank=True, null=True)
+    commercial_register = models.CharField(max_length=50, blank=True, null=True)
+
+    country = models.CharField(max_length=100, blank=True, null=True)
+    street = models.CharField(max_length=255, blank=True, null=True)
+    street_number = models.CharField(max_length=20, blank=True, null=True)
+    po_box = models.CharField(max_length=20, blank=True, null=True)
+    zip_code = models.CharField(max_length=20, blank=True, null=True)
+    town_city = models.CharField(max_length=100, blank=True, null=True)
+
+
+    logo = models.ImageField(upload_to='business_logos/', blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
     
     primary_user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='owned_business')
     internal_users = models.ManyToManyField(User, related_name='business_accounts')

@@ -15,7 +15,7 @@ import logging
 from .models import BusinessAccount, AccountSettings
 from .serializers import (
     AccountSettingsSerializer,
-    BusinessAccountMinimalSerializer,
+    BusinessAccountSerializer,
     AdminRegistrationSerializer
 )
 from apps.users.permissions import IsBusinessOwner
@@ -73,6 +73,16 @@ class AdminRegistrationView(APIView):
             # Send verification email without terminal logs
             send_verification_email(user)
             
+            # Get user roles
+            user_roles = user.user_roles.all()
+            system_roles = [
+                {
+                    "name": role.system_role,
+                    "displayName": role.get_system_role_display() if hasattr(role, 'get_system_role_display') else role.system_role.capitalize()
+                } 
+                for role in user_roles
+            ]
+            
             return Response({
                 'status': 'success',
                 'message': 'Admin user and business account created successfully. Please verify your email.',
@@ -85,6 +95,11 @@ class AdminRegistrationView(APIView):
                     'email': user.email,
                     'first_name': user.first_name,
                     'last_name': user.last_name,
+                    'is_active': user.is_active,
+                    'roles': [role.system_role for role in user_roles],
+                    'system_roles': system_roles,
+                    'created_at': user.created_at.isoformat(),
+                    'is_verified': user.is_verified
                 },
                 'business_account': {
                     'id': str(business_account.id),
@@ -161,8 +176,8 @@ class BusinessAccountInfoView(APIView):
                     type=openapi.TYPE_OBJECT,
                     properties={
                         'status': openapi.Schema(type=openapi.TYPE_STRING),
-                        'business_account': openapi.Schema(type=openapi.TYPE_OBJECT),
-                        'settings': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        'business_account': BusinessAccountSerializer,
+                        'settings': AccountSettingsSerializer,
                     }
                 )
             ),
@@ -187,25 +202,13 @@ class BusinessAccountInfoView(APIView):
                         'status': 'error',
                         'message': 'You do not have access to any business account.'
                     }, status=status.HTTP_403_FORBIDDEN)
-            
-            settings = AccountSettings.objects.get(business_account=business_account)
+                        
+            # Use serializers to format the response data
+            business_serializer = BusinessAccountSerializer(business_account)
             
             return Response({
                 'status': 'success',
-                'business_account': {
-                    'id': str(business_account.id),
-                    'business_name': business_account.business_name,
-                    'tax_number': business_account.tax_number,
-                    'business_address': business_account.business_address,
-                    'phone_number': business_account.phone_number,
-                    'website': business_account.website,
-                },
-                'settings': {
-                    'currency': settings.currency,
-                    'language': settings.language,
-                    'notification_emails': settings.notification_emails,
-                    'two_factor_auth': settings.two_factor_auth,
-                }
+                'business_account': business_serializer.data,
             })
         except (BusinessAccount.DoesNotExist, AccountSettings.DoesNotExist):
             return Response({

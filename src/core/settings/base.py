@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'drf_yasg',
     'corsheaders',
+    'django_filters',
 
     # Local apps
     'apps.users',
@@ -51,6 +52,7 @@ INSTALLED_APPS = [
     'apps.financials',
     'apps.notifications',
     'apps.common',
+    'apps.invoices',
 ]
 
 # Configure DRF to use JWT for authentication
