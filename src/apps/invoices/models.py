@@ -2,6 +2,7 @@ import uuid
 from django.db import models
 from django.utils import timezone
 from django.core.validators import MinValueValidator
+from decimal import Decimal
 
 from apps.common.models import BaseModel
 from apps.accounts.models import BusinessAccount
@@ -146,6 +147,21 @@ class Project(BaseModel):
         return self.name
 
 
+class Article(BaseModel):
+    """Model for articles that can be used in invoice line items"""
+    business_account = models.ForeignKey(BusinessAccount, on_delete=models.CASCADE, related_name='articles')
+    article_number = models.CharField(max_length=50, blank=True, null=True)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, null=True)
+    unit = models.CharField(max_length=50, default='ea')
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('21.00'), validators=[MinValueValidator(Decimal('0'))])
+    is_active = models.BooleanField(default=True)
+    
+    def __str__(self):
+        return f"{self.article_number} - {self.name}" if self.article_number else self.name
+
+
 class Invoice(BaseModel):
     """Main invoice model"""
     # Basic invoice information
@@ -180,11 +196,11 @@ class Invoice(BaseModel):
     is_paid = models.BooleanField(default=False)
     
     # Financial information
-    currency = models.CharField(max_length=3, default='USD')
-    vat_rate = models.DecimalField(max_digits=5, decimal_places=2, default=21.00, validators=[MinValueValidator(0)])
-    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    vat_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    currency = models.CharField(max_length=3, default='MAD')
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('20.00'), validators=[MinValueValidator(Decimal('0'))])
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    vat_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    total = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     
     # Reference information
     reference = models.CharField(max_length=100, blank=True, null=True)
@@ -223,11 +239,12 @@ class Invoice(BaseModel):
 class InvoiceLineItem(BaseModel):
     """Model for individual line items on an invoice"""
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='line_items')
+    article = models.ForeignKey(Article, on_delete=models.SET_NULL, null=True, blank=True, related_name='line_items')
     description = models.TextField()
-    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1.00)
+    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('1.00'))
     price = models.DecimalField(max_digits=10, decimal_places=2)
     vat_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
-    discount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    discount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     unit = models.CharField(max_length=50, null=True, blank=True)
     
     def __str__(self):
@@ -240,6 +257,17 @@ class InvoiceLineItem(BaseModel):
     
     def save(self, *args, **kwargs):
         """Override save to update invoice totals"""
+        # If an article is selected and no custom values are set, use article values
+        if self.article and not self.pk:  # Only for new items
+            if not self.description:
+                self.description = self.article.description or self.article.name
+            if not self.price:
+                self.price = self.article.price
+            if not self.vat_rate:
+                self.vat_rate = self.article.vat_rate
+            if not self.unit:
+                self.unit = self.article.unit
+                
         super().save(*args, **kwargs)
         self.invoice.calculate_totals()
 

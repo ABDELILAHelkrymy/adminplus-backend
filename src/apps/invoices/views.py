@@ -13,6 +13,8 @@ from pdf2image import convert_from_bytes
 import re
 import io
 import traceback
+from django.db import models
+from decimal import Decimal, DecimalException, InvalidOperation
 
 from apps.accounts.models import BusinessAccount
 from .models import (
@@ -24,7 +26,8 @@ from .models import (
     Invoice,
     InvoiceLineItem,
     InvoiceAttachment,
-    InvoiceEmailLog
+    InvoiceEmailLog,
+    Article
 )
 from .serializers import (
     SupplierSerializer,
@@ -36,7 +39,8 @@ from .serializers import (
     InvoiceDetailSerializer,
     InvoiceLineItemSerializer,
     InvoiceAttachmentSerializer,
-    InvoiceEmailLogSerializer
+    InvoiceEmailLogSerializer,
+    ArticleSerializer
 )
 
 
@@ -212,6 +216,41 @@ class ProjectViewSet(viewsets.ModelViewSet):
             )
 
 
+class ArticleViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing articles
+    """
+    serializer_class = ArticleSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'article_number', 'description']
+    ordering_fields = ['name', 'article_number', 'price', 'created_at']
+    filterset_fields = ['article_number', 'is_active']
+
+    def get_queryset(self):
+        """Return articles for the user's business account"""
+        if not self.request.user.is_authenticated:
+            return Article.objects.none()
+        
+        # Get the business accounts the user has access to
+        business_accounts = self.request.user.business_accounts.all()
+        if hasattr(self.request.user, 'owned_business'):
+            business_accounts = business_accounts | BusinessAccount.objects.filter(id=self.request.user.owned_business.id)
+        
+        return Article.objects.filter(business_account__in=business_accounts)
+    
+    def perform_create(self, serializer):
+        """Set the business account when creating an article"""
+        if hasattr(self.request.user, 'owned_business'):
+            serializer.save(business_account=self.request.user.owned_business)
+        else:
+            # Handle case where user doesn't have a business account
+            return Response(
+                {"error": "User does not have a business account"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
 class InvoiceViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing invoices
@@ -267,7 +306,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Mark an invoice as paid",
         operation_description="Mark the invoice as paid with the current date",
-        responses={200: openapi.Response("Invoice marked as paid")},
+        responses={200: openapi.Response(description="Invoice marked as paid")},
     )
     @action(detail=True, methods=['post'])
     def mark_as_paid(self, request, pk=None):
@@ -288,7 +327,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 'body': openapi.Schema(type=openapi.TYPE_STRING, description='Email body'),
             }
         ),
-        responses={200: openapi.Response("Invoice sent by email")},
+        responses={200: openapi.Response(description="Invoice sent by email")},
     )
     @action(detail=True, methods=['post'])
     def send_email(self, request, pk=None):
@@ -333,7 +372,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 'file': openapi.Schema(type=openapi.TYPE_FILE, description='Invoice file (PDF, JPG, PNG)'),
             }
         ),
-        responses={200: openapi.Response("Extracted data from invoice")},
+        responses={200: openapi.Response(description="Extracted data from invoice")},
     )
     @action(detail=False, methods=['post'])
     def parse_invoice(self, request):
@@ -386,7 +425,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 'file': openapi.Schema(type=openapi.TYPE_FILE, description='Expenditure invoice file (PDF, JPG, PNG)'),
             }
         ),
-        responses={200: openapi.Response("Extracted data from expenditure invoice")},
+        responses={200: openapi.Response(description="Extracted data from expenditure invoice")},
     )
     @action(detail=False, methods=['post'], url_path='parse-expenditure-invoice')
     def parse_expenditure_invoice(self, request):
@@ -484,9 +523,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 "address": ""
             },
             "line_items": [],
-            "subtotal": 0.0,
-            "tax_amount": 0.0,
-            "total": 0.0,
+            "subtotal": Decimal('0.0'),
+            "tax_amount": Decimal('0.0'),
+            "total": Decimal('0.0'),
             "invoice_type": "purchase"  # Default to purchase for expenditure invoices
         }
         
@@ -531,34 +570,50 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             price_match = re.search(r'(\d+\.?\d*)$', line)
             
             if qty_match and price_match and i+1 < len(lines):
-                quantity = float(qty_match.group(1))
-                price = float(price_match.group(1))
-                # Description is likely on the next line or between qty and price
-                desc_part = line[len(qty_match.group(0)):line.rfind(price_match.group(0))]
-                if not desc_part.strip():
-                    desc_part = lines[i+1]
-                
-                line_items.append({
-                    "description": desc_part.strip(),
-                    "quantity": quantity,
-                    "price": price,
-                    "unit": "ea"  # Default unit
-                })
+                try:
+                    quantity = Decimal(qty_match.group(1))
+                    price = Decimal(price_match.group(1))
+                    # Description is likely on the next line or between qty and price
+                    desc_part = line[len(qty_match.group(0)):line.rfind(price_match.group(0))]
+                    if not desc_part.strip():
+                        desc_part = lines[i+1]
+                    
+                    line_items.append({
+                        "description": desc_part.strip(),
+                        "quantity": quantity,
+                        "price": price,
+                        "unit": "ea"  # Default unit
+                    })
+                except (ValueError, InvalidOperation, DecimalException):
+                    # Skip this line if there's an error converting to Decimal
+                    continue
         
         data["line_items"] = line_items
         
         # Extract totals
         total_match = re.search(r'(total)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
         if total_match:
-            data["total"] = float(total_match.group(2))
+            try:
+                data["total"] = Decimal(total_match.group(2))
+            except (ValueError, InvalidOperation, DecimalException):
+                # Keep default value if conversion fails
+                pass
         
         subtotal_match = re.search(r'(subtotal|sub-total|net)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
         if subtotal_match:
-            data["subtotal"] = float(subtotal_match.group(2))
+            try:
+                data["subtotal"] = Decimal(subtotal_match.group(2))
+            except (ValueError, InvalidOperation, DecimalException):
+                # Keep default value if conversion fails
+                pass
         
         tax_match = re.search(r'(tax|vat|gst)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
         if tax_match:
-            data["tax_amount"] = float(tax_match.group(2))
+            try:
+                data["tax_amount"] = Decimal(tax_match.group(2))
+            except (ValueError, InvalidOperation, DecimalException):
+                # Keep default value if conversion fails
+                pass
         
         return data
 
@@ -576,9 +631,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 "address": ""
             },
             "line_items": [],
-            "subtotal": 0.0,
-            "tax_amount": 0.0,
-            "total": 0.0
+            "subtotal": Decimal('0.0'),
+            "tax_amount": Decimal('0.0'),
+            "total": Decimal('0.0')
         }
         
         # Extract invoice number
@@ -612,34 +667,50 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             price_match = re.search(r'(\d+\.?\d*)$', line)
             
             if qty_match and price_match and i+1 < len(lines):
-                quantity = float(qty_match.group(1))
-                price = float(price_match.group(1))
-                # Description is likely on the next line or between qty and price
-                desc_part = line[len(qty_match.group(0)):line.rfind(price_match.group(0))]
-                if not desc_part.strip():
-                    desc_part = lines[i+1]
-                
-                line_items.append({
-                    "description": desc_part.strip(),
-                    "quantity": quantity,
-                    "price": price,
-                    "unit": "ea"  # Default unit
-                })
+                try:
+                    quantity = Decimal(qty_match.group(1))
+                    price = Decimal(price_match.group(1))
+                    # Description is likely on the next line or between qty and price
+                    desc_part = line[len(qty_match.group(0)):line.rfind(price_match.group(0))]
+                    if not desc_part.strip():
+                        desc_part = lines[i+1]
+                    
+                    line_items.append({
+                        "description": desc_part.strip(),
+                        "quantity": quantity,
+                        "price": price,
+                        "unit": "ea"  # Default unit
+                    })
+                except (ValueError, InvalidOperation, DecimalException):
+                    # Skip this line if there's an error converting to Decimal
+                    continue
         
         data["line_items"] = line_items
         
         # Extract totals
         total_match = re.search(r'(total)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
         if total_match:
-            data["total"] = float(total_match.group(2))
+            try:
+                data["total"] = Decimal(total_match.group(2))
+            except (ValueError, InvalidOperation, DecimalException):
+                # Keep default value if conversion fails
+                pass
         
         subtotal_match = re.search(r'(subtotal|sub-total|net)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
         if subtotal_match:
-            data["subtotal"] = float(subtotal_match.group(2))
+            try:
+                data["subtotal"] = Decimal(subtotal_match.group(2))
+            except (ValueError, InvalidOperation, DecimalException):
+                # Keep default value if conversion fails
+                pass
         
         tax_match = re.search(r'(tax|vat|gst)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
         if tax_match:
-            data["tax_amount"] = float(tax_match.group(2))
+            try:
+                data["tax_amount"] = Decimal(tax_match.group(2))
+            except (ValueError, InvalidOperation, DecimalException):
+                # Keep default value if conversion fails
+                pass
         
         return data
 
@@ -664,6 +735,51 @@ class InvoiceLineItemViewSet(viewsets.ModelViewSet):
         invoice_id = self.kwargs.get('invoice_pk')
         invoice = Invoice.objects.get(id=invoice_id)
         serializer.save(invoice=invoice)
+        
+    @swagger_auto_schema(
+        operation_summary="Get available articles",
+        operation_description="Retrieve a list of articles that can be used in invoice line items",
+        responses={200: openapi.Response(description="List of available articles")},
+    )
+    @action(detail=False, methods=['get'])
+    def available_articles(self, request, invoice_pk=None):
+        """
+        Retrieve a list of available articles that can be used in invoice line items
+        """
+        # Get the invoice first to determine business account
+        try:
+            invoice = Invoice.objects.get(id=invoice_pk)
+            
+            # Get articles for this business account
+            articles = Article.objects.filter(
+                business_account=invoice.business_account,
+                is_active=True
+            )
+            
+            # Apply search filter if provided
+            search_query = request.query_params.get('search', None)
+            if search_query:
+                articles = articles.filter(
+                    models.Q(name__icontains=search_query) | 
+                    models.Q(article_number__icontains=search_query) |
+                    models.Q(description__icontains=search_query)
+                )
+
+                
+            # Paginate the results
+            page = self.paginate_queryset(articles)
+            if page is not None:
+                serializer = ArticleSerializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+                
+            serializer = ArticleSerializer(articles, many=True)
+            return Response(serializer.data)
+            
+        except Invoice.DoesNotExist:
+            return Response(
+                {"error": "Invoice not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
 
 class InvoiceAttachmentViewSet(viewsets.ModelViewSet):

@@ -10,7 +10,8 @@ from .views import (
     ProjectViewSet,
     InvoiceViewSet,
     InvoiceLineItemViewSet,
-    InvoiceAttachmentViewSet
+    InvoiceAttachmentViewSet,
+    ArticleViewSet
 )
 
 # Create a router for the primary resources
@@ -21,6 +22,7 @@ router.register(r'categories', CategoryViewSet, basename='category')
 router.register(r'payment-methods', PaymentMethodViewSet, basename='payment-method')
 router.register(r'projects', ProjectViewSet, basename='project')
 router.register(r'invoices', InvoiceViewSet, basename='invoice')
+router.register(r'articles', ArticleViewSet, basename='article')
 
 # Create nested routers for the related resources
 invoices_router = routers.NestedSimpleRouter(router, r'invoices', lookup='invoice')
