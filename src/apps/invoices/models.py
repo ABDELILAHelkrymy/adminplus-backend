@@ -149,6 +149,7 @@ class Project(BaseModel):
 
 class Article(BaseModel):
     """Model for articles that can be used in invoice line items"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     business_account = models.ForeignKey(BusinessAccount, on_delete=models.CASCADE, related_name='articles')
     article_number = models.CharField(max_length=50, blank=True, null=True)
     name = models.CharField(max_length=255)
