@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from decimal import Decimal
 from .models import (
     Supplier,
     Customer,
@@ -8,7 +9,8 @@ from .models import (
     Invoice,
     InvoiceLineItem,
     InvoiceAttachment,
-    InvoiceEmailLog
+    InvoiceEmailLog,
+    Article
 )
 
 
@@ -47,8 +49,16 @@ class ProjectSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
+class ArticleSerializer(serializers.ModelSerializer):    
+    class Meta:
+        model = Article
+        exclude = ['business_account']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
 class InvoiceLineItemSerializer(serializers.ModelSerializer):
     line_total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    article_details = ArticleSerializer(source='article', read_only=True)
     
     class Meta:
         model = InvoiceLineItem
