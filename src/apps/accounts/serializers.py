@@ -11,8 +11,12 @@ User = get_user_model()
 class AccountSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccountSettings
-        fields = ['currency', 'language', 'notification_emails', 'two_factor_auth']
-        read_only_fields = ['created_at', 'updated_at']
+        fields = [
+            'id', 'business_account', 'currency', 'language', 
+            'primary_language', 'primary_color', 'secondary_color',
+            'logo', 'notification_emails', 'two_factor_auth',
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'business_account']
     
     def validate_currency(self, value):
         # Make sure the currency is valid
