@@ -25,8 +25,8 @@ class BusinessAccount(BaseModel):
     zip_code = models.CharField(max_length=20, blank=True, null=True)
     town_city = models.CharField(max_length=100, blank=True, null=True)
 
-
-    logo = models.ImageField(upload_to='business_logos/', blank=True, null=True)
+    # Changed from ImageField to CharField to store Firebase URL
+    logo = models.URLField(max_length=500, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
     primary_user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='owned_business')
@@ -79,12 +79,17 @@ class AccountSettings(BaseModel):
     LANGUAGE_CHOICES = [
         ('en', 'English'),
         ('fr', 'French'),
-        ('ar', 'Arabic'),
+        ('nl', 'Dutch'),
     ]
     language = models.CharField(max_length=10, choices=LANGUAGE_CHOICES, default='en')
-    
+    primary_language = models.CharField(max_length=10, choices=LANGUAGE_CHOICES, default='en')
+    primary_color = models.CharField(max_length=7, default='#000000')  # Hex color code
+    secondary_color = models.CharField(max_length=7, default='#FFFFFF')  # Hex color code
+    # Changed from ImageField to CharField to store Firebase URL
+    logo = models.URLField(max_length=500, blank=True, null=True)
     notification_emails = models.BooleanField(default=True)
     two_factor_auth = models.BooleanField(default=False)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
     
     def __str__(self):
         return f"Settings for {self.business_account.business_name}"
