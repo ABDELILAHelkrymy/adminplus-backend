@@ -139,12 +139,46 @@ class PaymentMethod(BaseModel):
 
 class Project(BaseModel):
     """Model for projects that can be associated with invoices"""
+    STATUS_CHOICES = [
+        ('prospect', 'Prospect'),
+        ('in_progress', 'In Progress'),
+        ('finished', 'Finished'),
+        ('canceled', 'Canceled'),
+    ]
+    
     business_account = models.ForeignKey(BusinessAccount, on_delete=models.CASCADE, related_name='projects')
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='prospect')
+    
+    # Customer relationship
+    customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True, related_name='projects')
+    reference_number = models.CharField(max_length=50, blank=True, null=True, help_text='Customer reference or PO number')
+    
+    # Budget information
+    budget = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    time_budget = models.IntegerField(default=0, help_text='Time budget in hours')
+    hourly_rate = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    
+    # Project duration
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
     
     def __str__(self):
         return self.name
+        
+    @property
+    def used_budget(self):
+        """Calculate the used budget based on invoices linked to this project"""
+        from django.db.models import Sum
+        invoices = Invoice.objects.filter(project=self)
+        total = invoices.aggregate(Sum('total'))['total__sum']
+        return total or Decimal('0.00')
+    
+    @property
+    def remaining_budget(self):
+        """Calculate the remaining budget"""
+        return self.budget - self.used_budget
 
 
 class Article(BaseModel):
@@ -294,3 +328,60 @@ class InvoiceEmailLog(BaseModel):
     
     def __str__(self):
         return f"Email for {self.invoice.invoice_number} to {self.recipient}"
+
+
+class TimeEntry(BaseModel):
+    """Model for tracking time spent on projects"""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='time_entries')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='time_entries')
+    description = models.TextField(blank=True, null=True)
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField(null=True, blank=True)
+    duration_minutes = models.PositiveIntegerField(default=0, help_text='Duration in minutes')
+    is_billable = models.BooleanField(default=True)
+    billed = models.BooleanField(default=False)
+    invoice = models.ForeignKey(Invoice, on_delete=models.SET_NULL, null=True, blank=True, related_name='time_entries')
+    
+    class Meta:
+        verbose_name_plural = "Time entries"
+    
+    def __str__(self):
+        return f"Time entry for {self.project.name} by {self.user.get_full_name() or self.user.email}"
+    
+    def save(self, *args, **kwargs):
+        """Calculate duration if both start and end times are available"""
+        if self.start_time and self.end_time and not self.duration_minutes:
+            # Ensure we have datetime objects to work with
+            from datetime import datetime
+            from django.utils.dateparse import parse_datetime
+            
+            start = self.start_time
+            end = self.end_time
+            
+            # Convert string dates to datetime if needed
+            if isinstance(start, str):
+                start = parse_datetime(start)
+            if isinstance(end, str):
+                end = parse_datetime(end)
+                
+            # Update the instance fields with datetime objects
+            self.start_time = start
+            self.end_time = end
+            
+            # Calculate duration in minutes
+            delta = end - start
+            self.duration_minutes = int(delta.total_seconds() / 60)
+            
+        super().save(*args, **kwargs)
+        
+    @property
+    def hours(self):
+        """Return duration in hours (decimal)"""
+        return self.duration_minutes / 60
+    
+    @property
+    def billable_amount(self):
+        """Calculate billable amount based on project hourly rate"""
+        if not self.is_billable or not self.project.hourly_rate:
+            return Decimal('0.00')
+        return self.project.hourly_rate * Decimal(self.hours)

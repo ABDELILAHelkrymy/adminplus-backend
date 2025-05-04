@@ -10,7 +10,8 @@ from .models import (
     InvoiceLineItem,
     InvoiceAttachment,
     InvoiceEmailLog,
-    Article
+    Article,
+    TimeEntry
 )
 
 
@@ -43,10 +44,30 @@ class PaymentMethodSerializer(serializers.ModelSerializer):
 
 
 class ProjectSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    customer_name = serializers.SerializerMethodField(read_only=True)
+    used_budget = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    remaining_budget = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    total_hours = serializers.SerializerMethodField(read_only=True)
+    
     class Meta:
         model = Project
         exclude = ['business_account']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'used_budget', 'remaining_budget']
+    
+    def get_customer_name(self, obj):
+        return obj.customer.corporate_name if obj.customer else None
+        
+    def get_used_budget(self, obj):
+        return obj.used_budget
+        
+    def get_remaining_budget(self, obj):
+        return obj.remaining_budget
+        
+    def get_total_hours(self, obj):
+        from django.db.models import Sum
+        total_minutes = obj.time_entries.aggregate(Sum('duration_minutes'))['duration_minutes__sum']
+        return round(float(total_minutes or 0) / 60, 2)
 
 
 class ArticleSerializer(serializers.ModelSerializer):    
@@ -208,3 +229,21 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
             instance.save()
             
         return instance
+
+
+class TimeEntrySerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField(read_only=True)
+    project_name = serializers.SerializerMethodField(read_only=True)
+    hours = serializers.FloatField(read_only=True)
+    billable_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = TimeEntry
+        exclude = []
+        read_only_fields = ['id', 'created_at', 'updated_at', 'hours', 'billable_amount']
+    
+    def get_user_name(self, obj):
+        return obj.user.get_full_name() or obj.user.email
+    
+    def get_project_name(self, obj):
+        return obj.project.name

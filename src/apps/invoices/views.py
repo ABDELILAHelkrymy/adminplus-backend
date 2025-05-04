@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.utils import timezone
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -27,7 +28,8 @@ from .models import (
     InvoiceLineItem,
     InvoiceAttachment,
     InvoiceEmailLog,
-    Article
+    Article,
+    TimeEntry
 )
 from .serializers import (
     SupplierSerializer,
@@ -40,7 +42,8 @@ from .serializers import (
     InvoiceLineItemSerializer,
     InvoiceAttachmentSerializer,
     InvoiceEmailLogSerializer,
-    ArticleSerializer
+    ArticleSerializer,
+    TimeEntrySerializer
 )
 
 
@@ -188,9 +191,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
     """
     serializer_class = ProjectSerializer
     permission_classes = [IsAuthenticated]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['name']
-    ordering_fields = ['name', 'created_at']
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description', 'reference_number']
+    ordering_fields = ['name', 'status', 'created_at', 'budget', 'hourly_rate', 'start_date', 'end_date']
+    filterset_fields = ['status', 'customer']
 
     def get_queryset(self):
         """Return projects for the user's business account"""
@@ -214,6 +218,157 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 {"error": "User does not have a business account"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+    @swagger_auto_schema(
+        operation_summary="Start time tracking",
+        operation_description="Start tracking time for this project",
+        responses={200: TimeEntrySerializer()},
+    )
+    @action(detail=True, methods=['post'])
+    def start_clock(self, request, pk=None):
+        """Start time tracking for this project"""
+        project = self.get_object()
+        
+        # Check if there's already an active time entry for this user in any project
+        active_entries = TimeEntry.objects.filter(
+            user=request.user,
+            end_time__isnull=True
+        )
+        
+        if active_entries.exists():
+            # Stop the active time entry before starting a new one
+            active_entry = active_entries.first()
+            active_entry.end_time = timezone.now()
+            active_entry.save()
+            
+            # Return warning with the new entry
+            warning = f"Stopped active time entry for project '{active_entry.project.name}'"
+        else:
+            warning = None
+        
+        # Create a new time entry for this project
+        time_entry = TimeEntry.objects.create(
+            project=project,
+            user=request.user,
+            start_time=timezone.now(),
+            description="Time tracking started" # Default description
+        )
+        
+        serializer = TimeEntrySerializer(time_entry)
+        response_data = serializer.data
+        
+        if warning:
+            response_data['warning'] = warning
+            
+        return Response(response_data, status=status.HTTP_201_CREATED)
+    
+    @swagger_auto_schema(
+        operation_summary="Stop time tracking",
+        operation_description="Stop active time tracking for this project",
+        responses={200: TimeEntrySerializer()},
+    )
+    @action(detail=True, methods=['post'])
+    def stop_clock(self, request, pk=None):
+        """Stop time tracking for this project"""
+        project = self.get_object()
+        
+        # Find active time entry for this user and project
+        try:
+            time_entry = TimeEntry.objects.get(
+                user=request.user,
+                project=project,
+                end_time__isnull=True
+            )
+            
+            # Set the end time
+            time_entry.end_time = timezone.now()
+            time_entry.save()
+            
+            serializer = TimeEntrySerializer(time_entry)
+            return Response(serializer.data)
+        except TimeEntry.DoesNotExist:
+            return Response(
+                {"error": "No active time tracking found for this project"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    @swagger_auto_schema(
+        operation_summary="Add manual time entry",
+        operation_description="Add a manual time entry for this project",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['description', 'start_time', 'end_time'],
+            properties={
+                'description': openapi.Schema(type=openapi.TYPE_STRING, description='Description of work done'),
+                'start_time': openapi.Schema(type=openapi.TYPE_STRING, format='date-time', description='Start time'),
+                'end_time': openapi.Schema(type=openapi.TYPE_STRING, format='date-time', description='End time'),
+                'is_billable': openapi.Schema(type=openapi.TYPE_BOOLEAN, description='Whether this time is billable'),
+            }
+        ),
+        responses={201: TimeEntrySerializer()},
+    )
+    @action(detail=True, methods=['post'])
+    def add_time_entry(self, request, pk=None):
+        """Add a manual time entry for this project"""
+        project = self.get_object()
+        
+        # Validate required fields
+        required_fields = ['description', 'start_time', 'end_time']
+        for field in required_fields:
+            if field not in request.data:
+                return Response(
+                    {"error": f"Field '{field}' is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Create the time entry
+        time_entry_data = {
+            'project': project,
+            'user': request.user,
+            'description': request.data.get('description'),
+            'start_time': request.data.get('start_time'),
+            'end_time': request.data.get('end_time'),
+            'is_billable': request.data.get('is_billable', True)
+        }
+        
+        time_entry = TimeEntry.objects.create(**time_entry_data)
+        
+        serializer = TimeEntrySerializer(time_entry)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @swagger_auto_schema(
+        operation_summary="Get time entries",
+        operation_description="Get all time entries for this project",
+        responses={200: TimeEntrySerializer(many=True)},
+    )
+    @action(detail=True, methods=['get'])
+    def time_entries(self, request, pk=None):
+        """Get all time entries for this project"""
+        project = self.get_object()
+        
+        # Filter by date range if provided
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        
+        time_entries = project.time_entries.all()
+        
+        if start_date:
+            time_entries = time_entries.filter(start_time__gte=start_date)
+        
+        if end_date:
+            time_entries = time_entries.filter(end_time__lte=end_date)
+        
+        # Order by start_time descending (most recent first)
+        time_entries = time_entries.order_by('-start_time')
+        
+        # Paginate the results
+        page = self.paginate_queryset(time_entries)
+        if page is not None:
+            serializer = TimeEntrySerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+            
+        serializer = TimeEntrySerializer(time_entries, many=True)
+        return Response(serializer.data)
 
 
 class ArticleViewSet(viewsets.ModelViewSet):
@@ -802,6 +957,176 @@ class InvoiceAttachmentViewSet(viewsets.ModelViewSet):
         invoice_id = self.kwargs.get('invoice_pk')
         invoice = Invoice.objects.get(id=invoice_id)
         serializer.save(invoice=invoice)
+
+
+class TimeEntryViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing time entries
+    """
+    serializer_class = TimeEntrySerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['description']
+    ordering_fields = ['start_time', 'end_time', 'duration_minutes', 'created_at']
+    filterset_fields = ['project', 'user', 'is_billable', 'billed']
+    
+    def get_queryset(self):
+        """Return time entries for projects the user has access to"""
+        if not self.request.user.is_authenticated:
+            return TimeEntry.objects.none()
+        
+        # Get the business accounts the user has access to
+        business_accounts = self.request.user.business_accounts.all()
+        if hasattr(self.request.user, 'owned_business'):
+            business_accounts = business_accounts | BusinessAccount.objects.filter(id=self.request.user.owned_business.id)
+        
+        # Get projects for these business accounts
+        projects = Project.objects.filter(business_account__in=business_accounts)
+        
+        # Return time entries for these projects
+        return TimeEntry.objects.filter(project__in=projects)
+    
+    def perform_create(self, serializer):
+        """Set the user when creating a time entry"""
+        serializer.save(user=self.request.user)
+    
+    @swagger_auto_schema(
+        operation_summary="Stop active time entry",
+        operation_description="Stop the currently active time entry for the authenticated user",
+        responses={200: TimeEntrySerializer()},
+    )
+    @action(detail=False, methods=['post'])
+    def stop_active(self, request):
+        """Stop the currently active time entry for the authenticated user"""
+        try:
+            time_entry = TimeEntry.objects.get(
+                user=request.user,
+                end_time__isnull=True
+            )
+            
+            # Set the end time
+            time_entry.end_time = timezone.now()
+            time_entry.save()
+            
+            serializer = TimeEntrySerializer(time_entry)
+            return Response(serializer.data)
+        except TimeEntry.DoesNotExist:
+            return Response(
+                {"error": "No active time tracking found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    @swagger_auto_schema(
+        operation_summary="Get active time entry",
+        operation_description="Get the currently active time entry for the authenticated user if any",
+        responses={200: TimeEntrySerializer()},
+    )
+    @action(detail=False, methods=['get'])
+    def active(self, request):
+        """Get the currently active time entry for the authenticated user if any"""
+        try:
+            time_entry = TimeEntry.objects.get(
+                user=request.user,
+                end_time__isnull=True
+            )
+            
+            serializer = TimeEntrySerializer(time_entry)
+            return Response(serializer.data)
+        except TimeEntry.DoesNotExist:
+            return Response(
+                {"active": False},
+                status=status.HTTP_200_OK
+            )
+    
+    @swagger_auto_schema(
+        operation_summary="Generate invoice from time entries",
+        operation_description="Create an invoice from selected time entries",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['customer_id', 'time_entry_ids'],
+            properties={
+                'customer_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Customer ID'),
+                'time_entry_ids': openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Items(type=openapi.TYPE_INTEGER),
+                    description='List of time entry IDs to include in invoice'
+                ),
+            }
+        ),
+        responses={201: InvoiceSerializer()},
+    )
+    @action(detail=False, methods=['post'])
+    def create_invoice(self, request):
+        """Create an invoice from selected time entries"""
+        customer_id = request.data.get('customer_id')
+        time_entry_ids = request.data.get('time_entry_ids', [])
+        
+        if not customer_id or not time_entry_ids:
+            return Response(
+                {"error": "Customer ID and time entry IDs are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            customer = Customer.objects.get(id=customer_id)
+            time_entries = TimeEntry.objects.filter(id__in=time_entry_ids)
+            
+            if not time_entries:
+                return Response(
+                    {"error": "No valid time entries found"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Group time entries by project to ensure they're for the same customer
+            projects = set(entry.project for entry in time_entries)
+            project = projects.pop() if len(projects) == 1 else None
+            
+            # Create invoice
+            from datetime import datetime
+            invoice = Invoice.objects.create(
+                business_account=customer.business_account,
+                invoice_type='invoice',
+                invoice_number=f"INV-{datetime.now().strftime('%Y%m%d')}-{customer.number}",
+                customer=customer,
+                project=project,
+                date=timezone.now().date(),
+                due_date=(timezone.now() + timezone.timedelta(days=30)).date(),
+                currency='EUR'  # Default to EUR based on screenshots
+            )
+            
+            # Add line items for each time entry
+            for time_entry in time_entries:
+                # Create line item for this time entry
+                InvoiceLineItem.objects.create(
+                    invoice=invoice,
+                    description=f"{time_entry.description or 'Time entry'} - {time_entry.hours:.2f} hours",
+                    quantity=Decimal(str(time_entry.hours)),
+                    price=time_entry.project.hourly_rate,
+                    unit='hours'
+                )
+                
+                # Mark time entry as billed
+                time_entry.billed = True
+                time_entry.invoice = invoice
+                time_entry.save()
+            
+            # Calculate invoice totals
+            invoice.calculate_totals()
+            
+            serializer = InvoiceSerializer(invoice)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        except Customer.DoesNotExist:
+            return Response(
+                {"error": "Customer not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to create invoice: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 try:
     from pdf2image import convert_from_bytes
