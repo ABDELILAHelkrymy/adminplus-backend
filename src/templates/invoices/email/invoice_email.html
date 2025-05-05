@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Invoice {{ invoice_number }}</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .header {
+        margin-bottom: 20px;
+      }
+
+      .footer {
+        margin-top: 40px;
+        font-size: 0.9em;
+        color: #666;
+      }
+
+      .payment-info {
+        margin: 15px 0;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="header">
+      <p>Dear Sir/Madam,</p>
+    </div>
+
+    <p>
+      I have attached invoice {{ invoice_number }} for a total amount of
+      <span>{{ invoice_currency }} {{ invoice_total }} incl. VAT.</span>
+    </p>
+
+    <div class="payment-info">
+      <p>
+        Please pay this invoice by {{ invoice_due_date }}, stating the payment
+        reference +++{{ payment_reference }}+++ to the account number:<br />
+        {{ bank_account_number }}
+      </p>
+    </div>
+
+    <p>
+      Feel free to contact us if you have any questions regarding the invoice.
+    </p>
+
+    <div class="footer">
+      <p>
+        Kind regards,<br />
+        {{ business_name }}<br />
+        {{ business_address }}<br />
+        Tel: {{ business_phone }}<br />
+        E-mail: {{ business_email }}
+      </p>
+    </div>
+  </body>
+</html>

@@ -7,15 +7,14 @@ from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-import pytesseract
 from PIL import Image
-import pandas as pd
 from pdf2image import convert_from_bytes
+from django.db import models
+from decimal import Decimal, DecimalException, InvalidOperation
 import re
 import io
 import traceback
-from django.db import models
-from decimal import Decimal, DecimalException, InvalidOperation
+import pytesseract
 
 from apps.accounts.models import BusinessAccount
 from .models import (
@@ -45,6 +44,7 @@ from .serializers import (
     ArticleSerializer,
     TimeEntrySerializer
 )
+from .utils import send_invoice_email, generate_invoice_email_content
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
@@ -475,11 +475,18 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         operation_description="Send the invoice to a specified email address",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=['recipient', 'subject', 'body'],
+            required=['recipient'],
             properties={
                 'recipient': openapi.Schema(type=openapi.TYPE_STRING, description='Email recipient'),
-                'subject': openapi.Schema(type=openapi.TYPE_STRING, description='Email subject'),
-                'body': openapi.Schema(type=openapi.TYPE_STRING, description='Email body'),
+                'subject': openapi.Schema(type=openapi.TYPE_STRING, description='Email subject (optional)'),
+                'body': openapi.Schema(type=openapi.TYPE_STRING, description='Email body (optional)'),
+                'from_email': openapi.Schema(type=openapi.TYPE_STRING, description='Sender email (optional)'),
+                'attach_pdf': openapi.Schema(type=openapi.TYPE_BOOLEAN, description='Whether to attach the PDF invoice (optional)'),
+                'additional_attachments': openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Items(type=openapi.TYPE_FILE),
+                    description='Additional files to attach to the email'
+                ),
             }
         ),
         responses={200: openapi.Response(description="Invoice sent by email")},
@@ -491,13 +498,44 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         
         # Validate required fields
         recipient = request.data.get('recipient')
-        subject = request.data.get('subject')
-        body = request.data.get('body')
         
-        if not all([recipient, subject, body]):
+        if not recipient:
             return Response(
-                {"error": "Recipient, subject, and body are required"},
+                {"error": "Recipient email is required"},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get optional fields with defaults
+        subject = request.data.get('subject', f"{invoice.business_account.business_name}: Invoice {invoice.invoice_number}")
+        
+        # Generate default body if not provided
+        if request.data.get('body'):
+            body = request.data.get('body')
+        else:
+            # Generate email content from template
+            body = generate_invoice_email_content(invoice)
+        
+        from_email = request.data.get('from_email')
+        
+        # Get additional attachments
+        attachments = []
+        if 'additional_attachments' in request.FILES:
+            attachments = request.FILES.getlist('additional_attachments')
+        
+        # Send the email
+        email_success = send_invoice_email(
+            invoice=invoice,
+            recipient_email=recipient,
+            subject=subject,
+            content=body,
+            from_email=from_email,
+            attachments=attachments
+        )
+        
+        if not email_success:
+            return Response(
+                {"error": "Failed to send email. Please check the logs for more details."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
         # Create email log
@@ -509,13 +547,54 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             body=body
         )
         
-        # TODO: Actual email sending logic would go here
-        
         # Update invoice sent status
         invoice.sent = True
+        invoice.sent_to = recipient
         invoice.save()
         
-        return Response({"status": "Invoice sent by email"}, status=status.HTTP_200_OK)
+        # Return success response with email log details
+        email_log_serializer = InvoiceEmailLogSerializer(email_log)
+        return Response({
+            "status": "Invoice sent by email successfully",
+            "email_log": email_log_serializer.data
+        }, status=status.HTTP_200_OK)
+        
+    @swagger_auto_schema(
+        operation_summary="Generate email content",
+        operation_description="Generate default email content for sending the invoice",
+        responses={200: openapi.Response(description="Generated email content")},
+    )
+    @action(detail=True, methods=['get'])
+    def generate_email_content(self, request, pk=None):
+        """Generate default email content for the invoice"""
+        invoice = self.get_object()
+        
+        # First ensure the business account has an email
+        if not invoice.business_account.email and hasattr(invoice.business_account, 'primary_user'):
+            # Fill business email from primary user if missing
+            invoice.business_account.email = invoice.business_account.primary_user.email
+            invoice.business_account.save()
+            logger.info(f"Updated business account email from primary user: {invoice.business_account.email}")
+        
+        # Generate content with template
+        content = generate_invoice_email_content(invoice)
+        
+        # Prepare response data
+        subject = f"{invoice.business_account.business_name}: Invoice {invoice.invoice_number}"
+        recipient = ""
+        
+        # If this is a customer invoice, use customer email as recipient
+        if invoice.customer and invoice.customer.email:
+            recipient = invoice.customer.email
+        
+        response_data = {
+            "subject": subject,
+            "content": content,
+            "recipient": recipient,
+            "from_email": invoice.business_account.email,
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
         operation_summary="Parse invoice file",
@@ -1085,7 +1164,7 @@ class TimeEntryViewSet(viewsets.ModelViewSet):
             from datetime import datetime
             invoice = Invoice.objects.create(
                 business_account=customer.business_account,
-                invoice_type='invoice',
+                invoice_type='sele',
                 invoice_number=f"INV-{datetime.now().strftime('%Y%m%d')}-{customer.number}",
                 customer=customer,
                 project=project,
