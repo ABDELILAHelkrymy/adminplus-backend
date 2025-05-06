@@ -750,201 +750,274 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         # Default empty data
         data = {
             "invoice_number": "",
+            "status": "",
             "date": "",
+            "due_date": "",
+            "paid_date": "",
             "supplier_info": {
                 "name": "",
                 "tax_id": "",
-                "address": ""
+                "address": "",
+                "email": "",
+                "phone": ""
+            },
+            "customer_info": {
+                "name": "",
+                "tax_id": "",
+                "address": "",
+                "reference": "",
+                "email": "",
+                "phone": ""
             },
             "line_items": [],
-            "subtotal": Decimal('0.0'),
-            "tax_amount": Decimal('0.0'),
-            "total": Decimal('0.0'),
+            "subtotal": None,
+            "tax_amount": None,
+            "tax_rate": None,
+            "total": None,
+            "currency": "$",  # Default currency
             "invoice_type": "purchase"  # Default to purchase for expenditure invoices
         }
         
-        # Extract invoice number
-        invoice_number_match = re.search(r'invoice\s*(?:#|no|number|num)[:\s]*([0-9a-zA-Z\-_/]+)', text, re.IGNORECASE)
-        if invoice_number_match:
-            data["invoice_number"] = invoice_number_match.group(1).strip()
+        # Extract invoice number - using a more flexible pattern
+        invoice_number_patterns = [
+            r'invoice\s*(?:#|no|number|num)[:\s]*([0-9a-zA-Z\-_/]+)',
+            r'invoice[:\s]*([0-9a-zA-Z\-_/]+)',
+            r'#\s*([0-9a-zA-Z\-_/]+)',
+            r'\binvoice\b.*?([A-Z][0-9]+)',
+            r'(?<!\S)([A-Z][0-9]{6,})(?!\S)'  # Pattern like U45844566
+        ]
         
-        # Extract date
-        date_match = re.search(r'date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})', text, re.IGNORECASE)
-        if date_match:
-            data["date"] = date_match.group(1).strip()
+        for pattern in invoice_number_patterns:
+            invoice_number_match = re.search(pattern, text, re.IGNORECASE)
+            if invoice_number_match:
+                data["invoice_number"] = invoice_number_match.group(1).strip()
+                break
         
-        # Extract supplier name
-        supplier_match = re.search(r'(from|vendor|supplier|bill\s*from)[:\s]*([A-Za-z0-9\s.,]+)', text, re.IGNORECASE)
-        if supplier_match:
-            data["supplier_info"]["name"] = supplier_match.group(2).strip()
-        else:
-            # Try alternative patterns that might indicate supplier info
-            alt_supplier_match = re.search(r'^([A-Za-z0-9\s.,]+)\s*\n', text)
-            if alt_supplier_match:
-                data["supplier_info"]["name"] = alt_supplier_match.group(1).strip()
+        # Extract invoice status
+        status_match = re.search(r'status[:\s]*(\w+)', text, re.IGNORECASE)
+        if status_match:
+            data["status"] = status_match.group(1).strip().upper()
         
-        # Extract supplier tax ID
-        tax_id_match = re.search(r'(tax\s*id|vat\s*number|ico|ice)[:\s]*([A-Za-z0-9\s.,]+)', text, re.IGNORECASE)
-        if tax_id_match:
-            data["supplier_info"]["tax_id"] = tax_id_match.group(2).strip()
+        # Extract date formats (DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD)
+        date_patterns = [
+            r'date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})',
+            r'date[:\s]*(\d{4}-\d{1,2}-\d{1,2})',
+            r'date:\s*([\d]{1,2}/[\d]{1,2}/[\d]{4})'
+        ]
         
-        # Extract address - look for common address indicators
-        address_match = re.search(r'(address|location)[:\s]*([A-Za-z0-9\s.,\-]+(?:\n[A-Za-z0-9\s.,\-]+){0,3})', text, re.IGNORECASE)
-        if address_match:
-            data["supplier_info"]["address"] = address_match.group(2).strip()
+        for pattern in date_patterns:
+            date_match = re.search(pattern, text, re.IGNORECASE)
+            if date_match:
+                data["date"] = date_match.group(1).strip()
+                break
         
-        # Extract line items - this is more complex and depends on invoice format
-        # Here's a simple approach that looks for patterns that might be line items
-        lines = text.split('\n')
+        # Extract due date
+        due_date_patterns = [
+            r'due\s*date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})',
+            r'due\s*date[:\s]*(\d{4}-\d{1,2}-\d{1,2})',
+            r'due\s*date:\s*([\d]{1,2}/[\d]{1,2}/[\d]{4})'
+        ]
+        
+        for pattern in due_date_patterns:
+            due_date_match = re.search(pattern, text, re.IGNORECASE)
+            if due_date_match:
+                data["due_date"] = due_date_match.group(1).strip()
+                break
+        
+        # Extract paid date if available
+        paid_date_patterns = [
+            r'paid\s*date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})',
+            r'paid\s*date[:\s]*(\d{4}-\d{1,2}-\d{1,2})',
+            r'paid\s*date:\s*([\d]{1,2}/[\d]{1,2}/[\d]{4})'
+        ]
+        
+        for pattern in paid_date_patterns:
+            paid_date_match = re.search(pattern, text, re.IGNORECASE)
+            if paid_date_match:
+                data["paid_date"] = paid_date_match.group(1).strip()
+                break
+        
+        # Extract supplier name - first look for "From:" section
+        from_section = re.search(r'from[:\s]*\n*([\s\S]*?)(?=\n\s*\n|\nto[:\s]*|\Z)', text, re.IGNORECASE)
+        if from_section:
+            supplier_text = from_section.group(1).strip()
+            lines = supplier_text.split('\n')
+            if lines:
+                data["supplier_info"]["name"] = lines[0].strip()
+                
+                # Try to extract additional supplier info from subsequent lines
+                for line in lines[1:]:
+                    line = line.strip()
+                    # Look for potential tax ID patterns
+                    if re.match(r'^\d+$', line) or 'ice' in line.lower():
+                        data["supplier_info"]["tax_id"] = line
+        
+        # Extract customer info - look for "To:" section
+        to_section = re.search(r'to[:\s]*\n*([\s\S]*?)(?=\n\s*\n|\norder\s+lines|\Z)', text, re.IGNORECASE)
+        if to_section:
+            customer_text = to_section.group(1).strip()
+            lines = customer_text.split('\n')
+            if lines:
+                data["customer_info"]["name"] = lines[0].strip()
+                
+                # Look for email in customer section
+                email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', customer_text)
+                if email_match:
+                    data["customer_info"]["email"] = email_match.group(1).strip()
+                
+                # Try to extract phone number
+                phone_match = re.search(r'tel[:\s]*([0-9\s\-\+]+)', customer_text, re.IGNORECASE)
+                if phone_match:
+                    data["customer_info"]["phone"] = phone_match.group(1).strip()
+        
+        # Extract order lines table
         line_items = []
         
-        for i, line in enumerate(lines):
-            # Look for lines with quantity, description and price patterns
-            qty_match = re.search(r'^[\s]*(\d+\.?\d*)', line)
-            price_match = re.search(r'(\d+\.?\d*)$', line)
-            
-            if qty_match and price_match and i+1 < len(lines):
-                try:
-                    quantity = Decimal(qty_match.group(1))
-                    price = Decimal(price_match.group(1))
-                    # Description is likely on the next line or between qty and price
-                    desc_part = line[len(qty_match.group(0)):line.rfind(price_match.group(0))]
-                    if not desc_part.strip():
-                        desc_part = lines[i+1]
-                    
-                    line_items.append({
-                        "description": desc_part.strip(),
-                        "quantity": quantity,
-                        "price": price,
-                        "unit": "ea"  # Default unit
-                    })
-                except (ValueError, InvalidOperation, DecimalException):
-                    # Skip this line if there's an error converting to Decimal
+        # Look for tabular data in various formats
+        tables = re.findall(r'(?:description|item|product)\s+(?:quantity|qty)\s+(?:unit|uom)?\s+(?:price|rate)\s+(?:amount|total|sum).*?\n([\s\S]*?)(?=\n\s*\n|\nsubtotal|\ntotal|\Z)', text, re.IGNORECASE)
+        
+        if not tables:  # If no table headers found, try to find ORDER LINES section
+            order_section = re.search(r'order\s+lines.*?\n([\s\S]*?)(?=\n\s*\n|\nsubtotal|\ntotal|\Z)', text, re.IGNORECASE)
+            if order_section:
+                tables = [order_section.group(1).strip()]
+        
+        for table_text in tables:
+            lines = table_text.strip().split('\n')
+            for line in lines:
+                if not line.strip():
                     continue
+                
+                # Pattern to match: description, quantity, unit, price, amount
+                # Example: "test 2 15 unit $30.00 $450.00"
+                row_match = re.match(r'([^\d]+)\s+(\d+(?:\.\d+)?)\s+(\w+)\s+\$?(\d+\.\d+)\s+\$?(\d+\.\d+)', line)
+                if row_match:
+                    description = row_match.group(1).strip()
+                    quantity = row_match.group(2).strip()
+                    unit = row_match.group(3).strip()
+                    price = row_match.group(4).strip()
+                    amount = row_match.group(5).strip()
+                    
+                    try:
+                        line_items.append({
+                            "description": description,
+                            "quantity": float(quantity),
+                            "unit": unit,
+                            "price": float(price),
+                            "amount": float(amount)
+                        })
+                    except (ValueError, DecimalException, InvalidOperation):
+                        # Skip if conversion fails
+                        continue
+                else:
+                    # Try alternative pattern with just numbers and descriptions
+                    # Look for quantity, price, and amount
+                    qty_match = re.search(r'\b(\d+(?:\.\d+)?)\b', line)
+                    price_match = re.search(r'\$?(\d+\.\d+)', line)
+                    
+                    if qty_match and price_match and line.count('$') >= 1:
+                        try:
+                            # Try to extract description, quantity, price
+                            quantity = float(qty_match.group(1))
+                            price_index = line.find(price_match.group(0))
+                            description = line[:price_index].replace(qty_match.group(0), '', 1).strip()
+                            price = float(price_match.group(1))
+                            
+                            # Check for second price which would be the amount
+                            amount_match = re.search(r'\$?(\d+\.\d+)', line[price_index + len(price_match.group(0)):])
+                            if amount_match:
+                                amount = float(amount_match.group(1))
+                            else:
+                                amount = quantity * price
+                            
+                            line_items.append({
+                                "description": description,
+                                "quantity": quantity,
+                                "unit": "unit",  # Default when not specified
+                                "price": price,
+                                "amount": amount
+                            })
+                        except (ValueError, DecimalException, InvalidOperation, AttributeError):
+                            # Skip if extraction fails
+                            continue
         
         data["line_items"] = line_items
         
         # Extract totals
-        total_match = re.search(r'(total)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
-        if total_match:
-            try:
-                data["total"] = Decimal(total_match.group(2))
-            except (ValueError, InvalidOperation, DecimalException):
-                # Keep default value if conversion fails
-                pass
+        # Subtotal extraction
+        subtotal_patterns = [
+            r'subtotal[:\s]*\$?(\d+\.\d+)',
+            r'sub[ -]?total[:\s]*\$?(\d+\.\d+)'
+        ]
         
-        subtotal_match = re.search(r'(subtotal|sub-total|net)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
-        if subtotal_match:
-            try:
-                data["subtotal"] = Decimal(subtotal_match.group(2))
-            except (ValueError, InvalidOperation, DecimalException):
-                # Keep default value if conversion fails
-                pass
-        
-        tax_match = re.search(r'(tax|vat|gst)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
-        if tax_match:
-            try:
-                data["tax_amount"] = Decimal(tax_match.group(2))
-            except (ValueError, InvalidOperation, DecimalException):
-                # Keep default value if conversion fails
-                pass
-        
-        return data
-
-    def _extract_invoice_data(self, text):
-        """
-        Extract structured data from invoice text
-        """
-        # Default empty data
-        data = {
-            "invoice_number": "",
-            "date": "",
-            "supplier_info": {
-                "name": "",
-                "tax_id": "",
-                "address": ""
-            },
-            "line_items": [],
-            "subtotal": Decimal('0.0'),
-            "tax_amount": Decimal('0.0'),
-            "total": Decimal('0.0')
-        }
-        
-        # Extract invoice number
-        invoice_number_match = re.search(r'invoice\s*(?:#|no|number|num)[:\s]*([0-9a-zA-Z\-_/]+)', text, re.IGNORECASE)
-        if invoice_number_match:
-            data["invoice_number"] = invoice_number_match.group(1).strip()
-        
-        # Extract date
-        date_match = re.search(r'date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})', text, re.IGNORECASE)
-        if date_match:
-            data["date"] = date_match.group(1).strip()
-        
-        # Extract supplier name
-        supplier_match = re.search(r'(from|vendor|supplier|bill\s*from)[:\s]*([A-Za-z0-9\s.,]+)', text, re.IGNORECASE)
-        if supplier_match:
-            data["supplier_info"]["name"] = supplier_match.group(2).strip()
-        
-        # Extract supplier tax ID
-        tax_id_match = re.search(r'(tax\s*id|vat\s*number)[:\s]*([A-Za-z0-9\s.,]+)', text, re.IGNORECASE)
-        if tax_id_match:
-            data["supplier_info"]["tax_id"] = tax_id_match.group(2).strip()
-        
-        # Extract line items - this is more complex and depends on invoice format
-        # Here's a simple approach that looks for patterns that might be line items
-        lines = text.split('\n')
-        line_items = []
-        
-        for i, line in enumerate(lines):
-            # Look for lines with quantity, description and price patterns
-            qty_match = re.search(r'^[\s]*(\d+\.?\d*)', line)
-            price_match = re.search(r'(\d+\.?\d*)$', line)
-            
-            if qty_match and price_match and i+1 < len(lines):
+        for pattern in subtotal_patterns:
+            subtotal_match = re.search(pattern, text, re.IGNORECASE)
+            if subtotal_match:
                 try:
-                    quantity = Decimal(qty_match.group(1))
-                    price = Decimal(price_match.group(1))
-                    # Description is likely on the next line or between qty and price
-                    desc_part = line[len(qty_match.group(0)):line.rfind(price_match.group(0))]
-                    if not desc_part.strip():
-                        desc_part = lines[i+1]
-                    
-                    line_items.append({
-                        "description": desc_part.strip(),
-                        "quantity": quantity,
-                        "price": price,
-                        "unit": "ea"  # Default unit
-                    })
-                except (ValueError, InvalidOperation, DecimalException):
-                    # Skip this line if there's an error converting to Decimal
-                    continue
+                    data["subtotal"] = float(subtotal_match.group(1))
+                    break
+                except (ValueError, DecimalException, InvalidOperation):
+                    pass
         
-        data["line_items"] = line_items
+        # VAT/tax extraction with rate
+        tax_patterns = [
+            r'vat\s*(?:\((\d+)%\))?[:\s]*\$?(\d+\.\d+)',
+            r'tax\s*(?:\((\d+)%\))?[:\s]*\$?(\d+\.\d+)'
+        ]
         
-        # Extract totals
-        total_match = re.search(r'(total)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
-        if total_match:
+        for pattern in tax_patterns:
+            tax_match = re.search(pattern, text, re.IGNORECASE)
+            if tax_match:
+                try:
+                    if tax_match.group(1):  # If tax rate is captured
+                        data["tax_rate"] = float(tax_match.group(1))
+                    data["tax_amount"] = float(tax_match.group(2))
+                    break
+                except (ValueError, DecimalException, InvalidOperation):
+                    pass
+        
+        # Look for tax rate separately
+        if data["tax_rate"] is None:
+            tax_rate_match = re.search(r'(?:vat|tax)[:\s]*\((\d+)%\)', text, re.IGNORECASE)
+            if tax_rate_match:
+                try:
+                    data["tax_rate"] = float(tax_rate_match.group(1))
+                except (ValueError, DecimalException, InvalidOperation):
+                    pass
+        
+        # Total extraction
+        total_patterns = [
+            r'total[:\s]*\$?(\d+\.\d+)',
+            r'total amount[:\s]*\$?(\d+\.\d+)',
+            r'amount due[:\s]*\$?(\d+\.\d+)'
+        ]
+        
+        for pattern in total_patterns:
+            total_match = re.search(pattern, text, re.IGNORECASE)
+            if total_match:
+                try:
+                    data["total"] = float(total_match.group(1))
+                    break
+                except (ValueError, DecimalException, InvalidOperation):
+                    pass
+        
+        # If we still don't have the subtotal but have line items, calculate it
+        if data["subtotal"] is None and line_items:
             try:
-                data["total"] = Decimal(total_match.group(2))
-            except (ValueError, InvalidOperation, DecimalException):
-                # Keep default value if conversion fails
+                data["subtotal"] = sum(item["amount"] for item in line_items)
+            except (KeyError, TypeError):
                 pass
         
-        subtotal_match = re.search(r'(subtotal|sub-total|net)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
-        if subtotal_match:
-            try:
-                data["subtotal"] = Decimal(subtotal_match.group(2))
-            except (ValueError, InvalidOperation, DecimalException):
-                # Keep default value if conversion fails
-                pass
+        # If we have subtotal and tax amount but no total, calculate it
+        if data["total"] is None and data["subtotal"] is not None and data["tax_amount"] is not None:
+            data["total"] = data["subtotal"] + data["tax_amount"]
         
-        tax_match = re.search(r'(tax|vat|gst)[:\s]*[$€£]?(\d+\.?\d*)', text, re.IGNORECASE)
-        if tax_match:
-            try:
-                data["tax_amount"] = Decimal(tax_match.group(2))
-            except (ValueError, InvalidOperation, DecimalException):
-                # Keep default value if conversion fails
-                pass
+        # If we have subtotal and tax rate but no tax amount, calculate it
+        if data["tax_amount"] is None and data["subtotal"] is not None and data["tax_rate"] is not None:
+            data["tax_amount"] = data["subtotal"] * (data["tax_rate"] / 100)
+            
+            # And if we don't have total, calculate it too
+            if data["total"] is None:
+                data["total"] = data["subtotal"] + data["tax_amount"]
         
         return data
 
