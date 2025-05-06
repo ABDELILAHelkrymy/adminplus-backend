@@ -11,8 +11,12 @@ User = get_user_model()
 class AccountSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccountSettings
-        fields = ['currency', 'language', 'notification_emails', 'two_factor_auth']
-        read_only_fields = ['created_at', 'updated_at']
+        fields = [
+            'id', 'business_account', 'currency', 'language', 
+            'primary_language', 'primary_color', 'secondary_color',
+            'logo', 'notification_emails', 'two_factor_auth',
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'business_account']
     
     def validate_currency(self, value):
         # Make sure the currency is valid
@@ -26,6 +30,26 @@ class AccountSettingsSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f"Invalid language. Choose from {[choice[0] for choice in AccountSettings.LANGUAGE_CHOICES]}")
         return value
 
+class BusinessAccountSerializer(serializers.ModelSerializer):
+    primary_user = serializers.PrimaryKeyRelatedField(read_only=True)
+    settings = AccountSettingsSerializer(read_only=True)
+
+    class Meta:
+        model = BusinessAccount
+        fields = [
+            'id', 'business_name', 'tax_number', 'business_address', 
+            'phone_number', 'website', 'primary_user',
+            'ice_number', 'commercial_register', 'country', 'street',
+            'street_number', 'po_box', 'zip_code', 'town_city', 'logo',
+            'created_at', 'updated_at', 'settings'
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+    def validate_business_name(self, value):
+        # Make sure the business name is unique
+        if BusinessAccount.objects.filter(business_name=value).exists():
+            raise serializers.ValidationError("Business name already exists.")
+        return value
 
 class BusinessAccountMinimalSerializer(serializers.ModelSerializer):
     class Meta:
@@ -105,4 +129,4 @@ class AdminRegistrationSerializer(serializers.Serializer):
             'user': user,
             'business_account': business_account,
             'settings': settings
-        } 
+        }
