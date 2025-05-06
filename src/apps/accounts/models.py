@@ -14,6 +14,7 @@ class BusinessAccount(BaseModel):
     business_address = models.TextField(blank=True, null=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True)
     website = models.URLField(blank=True, null=True)
+    email = models.EmailField(max_length=255, blank=True, null=True)
 
     ice_number = models.CharField(max_length=50, blank=True, null=True)
     commercial_register = models.CharField(max_length=50, blank=True, null=True)
@@ -62,6 +63,29 @@ class BusinessAccount(BaseModel):
             created_by=created_by
         )
 
+    def fill_business_email_from_user(self):
+        """
+        Fill business email from the primary user
+        """
+        if self.primary_user and not self.email:
+            self.email = self.primary_user.email
+            self.save()
+            return True
+        return False
+
+    def get_email_for_communication(self):
+        """
+        Get the best email for business communication
+        Returns the business email if set, otherwise the primary user's email
+        """
+        if self.email:
+            return self.email
+        elif self.primary_user:
+            # If business email isn't set but primary user exists, update and return
+            self.email = self.primary_user.email
+            self.save()
+            return self.email
+        return None
 
 # --------------------------
 #  ACCOUNT SETTINGS MODEL
