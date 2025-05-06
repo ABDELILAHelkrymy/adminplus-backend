@@ -9,12 +9,14 @@ aptPkgs = [
   "libtiff-dev",
   "python3-cffi",
   "pkg-config",
-  "gcc"
+  "gcc",
+  "python3-pip"
 ]
 
 [phases.install]
 cmds = [
-  "python -m pip install --upgrade pip setuptools wheel",
-  "python -m pip install cffi --no-binary cffi",
-  "python -m pip install -r requirements.txt"
+  "python3 -m ensurepip",
+  "python3 -m pip install --upgrade pip setuptools wheel",
+  "python3 -m pip install cffi --no-binary cffi",
+  "python3 -m pip install -r requirements.txt"
 ]
