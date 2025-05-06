@@ -21,3 +21,14 @@ pynacl
 pytz
 requests
 urllib3
+drf-nested-routers
+pytesseract
+pdf2image
+python-dateutil
+jinja2
+reportlab
+django-storages
+boto3
+xlsxwriter
+html2text
+PyPDF2
