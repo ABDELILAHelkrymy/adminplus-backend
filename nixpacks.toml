@@ -8,5 +8,13 @@ aptPkgs = [
   "zlib1g-dev", 
   "libtiff-dev",
   "python3-cffi",
-  "pkg-config"
+  "pkg-config",
+  "gcc"
+]
+
+[phases.install]
+cmds = [
+  "pip install --upgrade pip setuptools wheel",
+  "pip install cffi --no-binary cffi",
+  "pip install -r requirements.txt"
 ]
