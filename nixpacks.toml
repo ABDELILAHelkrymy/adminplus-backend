@@ -1,0 +1,12 @@
+[phases.setup]
+aptPkgs = [
+  "python3-dev", 
+  "build-essential",
+  "libffi-dev",
+  "libjpeg-dev", 
+  "libpng-dev", 
+  "zlib1g-dev", 
+  "libtiff-dev",
+  "python3-cffi",
+  "pkg-config"
+]
