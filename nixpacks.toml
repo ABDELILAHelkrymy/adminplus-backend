@@ -1,22 +1,26 @@
+[build]
+builder = "NIXPACKS_PYTHON"
+
 [phases.setup]
-aptPkgs = [
-  "python3-dev", 
-  "build-essential",
-  "libffi-dev",
-  "libjpeg-dev", 
-  "libpng-dev", 
-  "zlib1g-dev", 
-  "libtiff-dev",
-  "python3-cffi",
-  "pkg-config",
-  "gcc",
-  "python3-pip"
+nixPkgs = [
+  "gcc", 
+  "libffi", 
+  "zlib",
+  "libjpeg",
+  "libpng",
+  "libtiff",
+  "pkgconfig",
+  "python312",
+  "python312Packages.pip",
+  "python312Packages.wheel",
+  "python312Packages.setuptools"
 ]
 
 [phases.install]
 cmds = [
-  "python3 -m ensurepip",
-  "python3 -m pip install --upgrade pip setuptools wheel",
-  "python3 -m pip install cffi --no-binary cffi",
-  "python3 -m pip install -r requirements.txt"
+  "pip install wheel",
+  "pip install -r requirements.txt"
 ]
+
+[start]
+cmd = "cd src && gunicorn core.wsgi:application --log-file -"
