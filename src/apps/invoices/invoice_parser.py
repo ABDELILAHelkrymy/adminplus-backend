@@ -1344,6 +1344,8 @@ class InvoiceParser:
         Works with multiple invoice formats by using simple row-based patterns
         """
         line_items = []
+        line_item_id = 1
+        data = {}
         
         # Step 1: Find the actual ORDER LINES section (for YH45687 format)
         # Look specifically for the table structure with the header pattern
