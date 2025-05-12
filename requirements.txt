@@ -32,3 +32,4 @@ boto3
 xlsxwriter
 html2text
 PyPDF2
+langdetect
