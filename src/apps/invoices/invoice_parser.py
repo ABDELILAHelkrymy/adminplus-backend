@@ -11,6 +11,15 @@ from datetime import datetime
 import difflib
 import cv2
 import numpy as np
+import os
+from django.conf import settings 
+import logging
+import pdfplumber
+
+logger = logging.getLogger(__name__)
+
+# Import GPT parser
+from .gpt_invoice_parser import GPTInvoiceParser
 
 
 class InvoiceParser:
@@ -96,6 +105,39 @@ class InvoiceParser:
     }
 
     @staticmethod
+    def parse_invoice(invoice_file):
+        """
+        Main entry point for invoice parsing.
+        This method switches between regex-based parsing and GPT-based parsing
+        depending on the USE_GPT_INVOICE_PARSER environment variable.
+        
+        Args:
+            invoice_file: The uploaded file object
+            
+        Returns:
+            dict: Extracted invoice data
+        """
+        # Extract text from file
+        text, file_extension = InvoiceParser.extract_text_from_file(invoice_file)
+        
+        # Check if GPT parser should be used
+        use_gpt = settings.GPT_USE_GPT_4
+        print(f"Using GPT parser: {use_gpt}")
+        if use_gpt:
+            try:
+                # Initialize and use GPT parser
+                gpt_parser = GPTInvoiceParser()
+                extracted_data = gpt_parser.extract_invoice_data(text)
+                return extracted_data
+            except Exception as e:
+                print(f"Error using GPT parser: {str(e)}. Falling back to regex parser.")
+                # Fall back to regex parser in case of GPT parser failure
+                return InvoiceParser.extract_invoice_data(text)
+        else:
+            # Use regex-based parser
+            return InvoiceParser.extract_invoice_data(text)
+
+    @staticmethod
     def detect_language(text):
         try:
             lang = langdetect.detect(text)
@@ -108,46 +150,69 @@ class InvoiceParser:
     @staticmethod
     def extract_text_from_file(invoice_file):
         """
-        Extract text content from various file formats (PDF, JPG, PNG)
-        Adds debug logging to print the OCR output before parsing.
-        
-        Args:
-            invoice_file: The uploaded file object
-            
+        Extract text content from various file formats (PDF, JPG, PNG).
+        Applies OCR with preprocessing and tags potential line items.
+
         Returns:
-            tuple: (extracted_text, file_extension)
-            
-        Raises:
-            Exception: If file format is unsupported or extraction fails
+            tuple: (extracted_text_with_tags, file_extension)
         """
         file_extension = invoice_file.name.split('.')[-1].lower()
         text = ""
+
+        def tag_line_items(text_lines):
+            structured_lines = []
+            for line in text_lines:
+                line = line.strip()
+                # Detect line items with quantity, description, unit price, and total
+                if re.search(r'\d+[.,]?\d*\s+.*?\s+\d{1,3}[.,]?\d{2,}\s+\d{1,3}[.,]?\d{2,}', line):
+                    structured_lines.append("[LINE_ITEM] " + line)
+                else:
+                    structured_lines.append(line)
+            return "\n".join(structured_lines)
+
+        def preprocess_image(img):
+            img = img.convert('L')  # Convert to grayscale
+            img = cv2.cvtColor(np.array(img), cv2.COLOR_GRAY2BGR)
+            img = cv2.resize(img, (0, 0), fx=1.5, fy=1.5)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            thresh = cv2.adaptiveThreshold(gray, 255,
+                                           cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                           cv2.THRESH_BINARY, 11, 2)
+            return thresh
+
         if file_extension == 'pdf':
-            images = convert_from_bytes(invoice_file.read())
-            for img in images:
-                img_byte_array = io.BytesIO()
-                img.save(img_byte_array, format='PNG')
-                img_byte_array.seek(0)
-                text += pytesseract.image_to_string(Image.open(img_byte_array))
+            try:
+                # Try extracting text directly from the PDF
+                with pdfplumber.open(invoice_file) as pdf:
+                    text = "\n".join([page.extract_text() or "" for page in pdf.pages])
+            except Exception:
+                # Fallback to OCR
+                invoice_file.seek(0)
+                images = convert_from_bytes(invoice_file.read(), dpi=400)
+                for img in images:
+                    img = Image.fromarray(preprocess_image(img))
+                    config = r'--oem 3 --psm 6'
+                    text += pytesseract.image_to_string(img, config=config)
         elif file_extension in ['jpg', 'jpeg', 'png']:
-            # Preprocess the image
             image = Image.open(invoice_file)
-            image = image.convert('L')  # Convert to grayscale
-            image = cv2.cvtColor(np.array(image), cv2.COLOR_GRAY2BGR)
-            # Resize image to a standard size
-            image = cv2.resize(image, (0, 0), fx=1.5, fy=1.5)
-            # Apply adaptive thresholding
-            image = cv2.adaptiveThreshold(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 255,
-                                          cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-            # Use pytesseract with custom configuration
-            custom_config = r'--oem 3 --psm 6'
-            text = pytesseract.image_to_string(image, config=custom_config)
+            image = preprocess_image(image)
+            config = r'--oem 3 --psm 6'
+            text = pytesseract.image_to_string(image, config=config)
         else:
             raise ValueError("Unsupported file format. Please upload PDF, JPG, or PNG.")
-        # Debug: Print OCR output
-        print("\n===== OCR EXTRACTED TEXT =====\n" + text + "\n==============================\n")
-        return text, file_extension
-    
+
+        # Normalize text for better line item detection
+        text = re.sub(r' {2,}', '\n', text)  # Break long spaces into newlines
+        text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+        text_lines = text.splitlines()
+
+        # Tag detected line items
+        tagged_text = tag_line_items(text_lines)
+
+        print("\n===== OCR EXTRACTED TEXT WITH LINE TAGS =====\n" + tagged_text + "\n============================================\n")
+        return tagged_text, file_extension
+
+
     @staticmethod
     def extract_invoice_data(text):
         """
@@ -1478,7 +1543,7 @@ class InvoiceParser:
             total_amount_candidates = []
             
             # Find all numbers that could be amounts
-            amount_pattern = r'(\d{1,3}(?:[,.\s]\d{3})*(?:[,.]\d{2}))'
+            amount_pattern = r'(\d{1,3}(?:[,.\s]\d{3})*(?:[.,]\d{2}))'
             for match in re.finditer(amount_pattern, last_part):
                 try:
                     amount = parse_number(match.group(1))
@@ -1492,10 +1557,10 @@ class InvoiceParser:
                 sorted_amounts = sorted(total_amount_candidates, reverse=True)
                 if data["total"] is None and len(sorted_amounts) >= 1:
                     data["total"] = sorted_amounts[0]
-                if data["subtotal"] is None and len(sorted_amounts) >= 2:
-                    data["subtotal"] = sorted_amounts[1]
-                if data["tax_amount"] is None and len(sorted_amounts) >= 3:
-                    data["tax_amount"] = sorted_amounts[2]
+                if len(sorted_amounts) > 1 and data["tax_amount"] is None:
+                    data["tax_amount"] = sorted_amounts[1]
+                if len(sorted_amounts) > 2 and data["subtotal"] is None:
+                    data["subtotal"] = sorted_amounts[2]
         
         # Infer missing values based on what we have
         if data["subtotal"] is not None and data["tax_amount"] is not None and data["total"] is None:

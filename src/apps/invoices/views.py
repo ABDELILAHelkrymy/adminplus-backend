@@ -621,13 +621,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             invoice_file = request.FILES['file']
             
-            # Use the InvoiceParser class to extract text from file
+            # Use the new InvoiceParser.parse_invoice method that switches between regex and GPT parser
             try:
-                extracted_text, file_extension = InvoiceParser.extract_text_from_file(invoice_file)
-                
-                # Extract data from the text
-                extracted_data = InvoiceParser.extract_invoice_data(extracted_text)
-                
+                extracted_data = InvoiceParser.parse_invoice(invoice_file)
                 return Response(extracted_data, status=status.HTTP_200_OK)
             except ValueError as e:
                 return Response(
@@ -685,9 +681,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             # Use the InvoiceParser class to extract text and data
             try:
-                extracted_text, file_extension = InvoiceParser.extract_text_from_file(invoice_file)
-                extracted_data = InvoiceParser.extract_expenditure_invoice_data(extracted_text)
-                
+                extracted_data = InvoiceParser.parse_invoice(invoice_file)
                 # Try to find supplier based on extracted data if user has a business account
                 if hasattr(request.user, 'owned_business'):
                     business_account = request.user.owned_business
