@@ -9,6 +9,8 @@ import langdetect
 import json
 from datetime import datetime
 import difflib
+import cv2
+import numpy as np
 
 
 class InvoiceParser:
@@ -128,7 +130,18 @@ class InvoiceParser:
                 img_byte_array.seek(0)
                 text += pytesseract.image_to_string(Image.open(img_byte_array))
         elif file_extension in ['jpg', 'jpeg', 'png']:
-            text = pytesseract.image_to_string(Image.open(invoice_file))
+            # Preprocess the image
+            image = Image.open(invoice_file)
+            image = image.convert('L')  # Convert to grayscale
+            image = cv2.cvtColor(np.array(image), cv2.COLOR_GRAY2BGR)
+            # Resize image to a standard size
+            image = cv2.resize(image, (0, 0), fx=1.5, fy=1.5)
+            # Apply adaptive thresholding
+            image = cv2.adaptiveThreshold(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), 255,
+                                          cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+            # Use pytesseract with custom configuration
+            custom_config = r'--oem 3 --psm 6'
+            text = pytesseract.image_to_string(image, config=custom_config)
         else:
             raise ValueError("Unsupported file format. Please upload PDF, JPG, or PNG.")
         # Debug: Print OCR output
