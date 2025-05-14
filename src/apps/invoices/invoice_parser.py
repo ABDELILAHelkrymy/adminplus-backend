@@ -15,6 +15,7 @@ import os
 from django.conf import settings 
 import logging
 import pdfplumber
+from typing import Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,28 @@ class InvoiceParser:
         print("\n===== OCR EXTRACTED TEXT WITH LINE TAGS =====\n" + tagged_text + "\n============================================\n")
         return tagged_text, file_extension
 
+    def extract_supplier_and_customer_ice(text: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Extracts all ICE numbers from the invoice text and assumes:
+        - The last ICE is the supplier's (based on Moroccan invoice layout)
+        - The first ICE is the customer's
+
+        Args:
+            text (str): OCR extracted invoice text
+
+        Returns:
+            Tuple (supplier_ice, customer_ice)
+        """
+        # Match 15-digit ICE numbers
+        ice_matches = re.findall(r'ICE\s*[:\-]?\s*(\d{15})', text, re.IGNORECASE)
+
+        if not ice_matches:
+            return None, None
+
+        supplier_ice = ice_matches[-1]  # Assume last ICE is supplier
+        customer_ice = ice_matches[0] if len(ice_matches) > 1 else None
+
+        return supplier_ice, customer_ice
 
     @staticmethod
     def extract_invoice_data(text):
@@ -241,6 +264,12 @@ class InvoiceParser:
             data['tax_amount'] = InvoiceParser._extract_tax_amount_generic(text)
         if not data['tax_rate']:
             data['tax_rate'] = InvoiceParser._extract_tax_rate_generic(text)
+
+        supplier_ice, customer_ice = InvoiceParser.extract_supplier_and_customer_ice(text)
+        if supplier_ice:
+            data['supplier_info']['ice'] = supplier_ice
+        if customer_ice:
+            data['customer_info']['ice'] = customer_ice
 
         # Only use generic line item extraction if language-specific extraction found nothing
         if not data['line_items']:

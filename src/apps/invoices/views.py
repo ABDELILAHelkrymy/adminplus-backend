@@ -686,14 +686,22 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 if hasattr(request.user, 'owned_business'):
                     business_account = request.user.owned_business
                     
-                    supplier_name = extracted_data.get('supplier_info', {}).get('name', '').strip()
-                    if supplier_name:
-                        suppliers = Supplier.objects.filter(
-                            business_account=business_account,
-                            corporate_name__icontains=supplier_name
-                        )
-                        if suppliers.exists():
-                            extracted_data['supplier_id'] = suppliers.first().id
+                    # Get supplier name from ICE number
+                    supplier_info = extracted_data.get('supplier_info', {}) or {}
+                    supplier_ice = supplier_info.get('ice')
+                    supplier_name = str(supplier_ice).strip() if supplier_ice else ''
+                    
+                    suppliers = Supplier.objects.filter(
+                        business_account=business_account,
+                        ice_number=supplier_name
+                    )
+                    if suppliers.exists():
+                        extracted_data['supplier_id'] = suppliers.first().id
+                
+                # Get customer name from ICE number
+                customer_info = extracted_data.get('customer_info', {}) or {}
+                customer_ice = customer_info.get('ice')
+                customer_name = str(customer_ice).strip() if customer_ice else ''
                 
                 return Response(extracted_data, status=status.HTTP_200_OK)
                 
