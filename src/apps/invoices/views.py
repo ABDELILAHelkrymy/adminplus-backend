@@ -8,13 +8,11 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from PIL import Image
-from pdf2image import convert_from_bytes
-from django.db import models
-from decimal import Decimal, DecimalException, InvalidOperation
-import re
 import io
 import traceback
-import pytesseract
+import logging
+from django.db import models
+from decimal import Decimal, DecimalException, InvalidOperation
 
 from apps.accounts.models import BusinessAccount
 from .models import (
@@ -45,6 +43,10 @@ from .serializers import (
     TimeEntrySerializer
 )
 from .utils import send_invoice_email, generate_invoice_email_content
+from .invoice_parser import InvoiceParser
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
@@ -618,32 +620,19 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
             
             invoice_file = request.FILES['file']
-            file_extension = invoice_file.name.split('.')[-1].lower()
             
-            # Extract text based on file type
-            if file_extension == 'pdf':
-                # Convert PDF to images
-                images = convert_from_bytes(invoice_file.read())
-                text = ""
-                for img in images:
-                    img_byte_array = io.BytesIO()
-                    img.save(img_byte_array, format='PNG')
-                    img_byte_array.seek(0)
-                    text += pytesseract.image_to_string(Image.open(img_byte_array))
-            elif file_extension in ['jpg', 'jpeg', 'png']:
-                text = pytesseract.image_to_string(Image.open(invoice_file))
-            else:
+            # Use the new InvoiceParser.parse_invoice method that switches between regex and GPT parser
+            try:
+                extracted_data = InvoiceParser.parse_invoice(invoice_file)
+                return Response(extracted_data, status=status.HTTP_200_OK)
+            except ValueError as e:
                 return Response(
-                    {"error": "Unsupported file format. Please upload PDF, JPG, or PNG."},
+                    {"error": str(e)},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            # Extract information from the text
-            extracted_data = self._extract_invoice_data(text)
-            
-            return Response(extracted_data, status=status.HTTP_200_OK)
+                
         except Exception as e:
-            print(traceback.format_exc())
+            logger.error(f"Invoice parsing error: {str(e)}\n{traceback.format_exc()}")
             return Response(
                 {"error": f"Failed to parse invoice: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -667,359 +656,72 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         Extract data from uploaded expenditure invoice file specifically for expenditure invoices
         """
         try:
-            # Check if Tesseract is installed
-            try:
-                import pytesseract
-                pytesseract.get_tesseract_version()
-            except (ImportError, pytesseract.TesseractNotFoundError):
+            # Check dependencies
+            is_tesseract_installed, is_poppler_installed = InvoiceParser.check_dependencies()
+            
+            if not is_tesseract_installed or not is_poppler_installed:
+                # Get installation instructions
+                instructions = InvoiceParser.get_dependency_installation_instructions()
+                
+                error_message = []
+                if not is_tesseract_installed:
+                    error_message.append("Tesseract OCR is not installed or not in your PATH.")
+                if not is_poppler_installed:
+                    error_message.append("Poppler is not installed or not in your PATH.")
+                
                 return Response({
-                    "error": "Tesseract OCR is not installed or not in your PATH. Please install Tesseract OCR and make sure it's in your PATH.",
-                    "installation_instructions": {
-                        "windows": "1. Download and install Tesseract from https://github.com/UB-Mannheim/tesseract/wiki\n2. Add the Tesseract installation directory to your PATH environment variable",
-                        "linux": "sudo apt-get install tesseract-ocr",
-                        "mac": "brew install tesseract"
-                    }
+                    "error": " ".join(error_message) + " Please install the required dependencies.",
+                    "installation_instructions": instructions
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 
             if 'file' not in request.FILES:
                 return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
             
             invoice_file = request.FILES['file']
-            file_extension = invoice_file.name.split('.')[-1].lower()
             
-            # Extract text based on file type
-            if file_extension == 'pdf':
-                try:
-                    # Convert PDF to images
-                    images = convert_from_bytes(invoice_file.read())
-                    text = ""
-                    for img in images:
-                        img_byte_array = io.BytesIO()
-                        img.save(img_byte_array, format='PNG')
-                        img_byte_array.seek(0)
-                        text += pytesseract.image_to_string(Image.open(img_byte_array))
-                except Exception as e:
-                    # If pdf2image fails, we might need poppler
-                    return Response({
-                        "error": f"Error processing PDF file: {str(e)}",
-                        "installation_instructions": {
-                            "windows": "1. Download and install Poppler from https://github.com/oschwartz10612/poppler-windows/releases\n2. Add the Poppler bin directory to your PATH environment variable",
-                            "linux": "sudo apt-get install poppler-utils",
-                            "mac": "brew install poppler"
-                        }
-                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            elif file_extension in ['jpg', 'jpeg', 'png']:
-                text = pytesseract.image_to_string(Image.open(invoice_file))
-            else:
-                return Response(
-                    {"error": "Unsupported file format. Please upload PDF, JPG, or PNG."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Extract information from the text, specifically for expenditure invoices
-            extracted_data = self._extract_expenditure_invoice_data(text)
-            
-            # Save the uploaded file for reference
-            if hasattr(request.user, 'owned_business'):
-                business_account = request.user.owned_business
-                
-                # Try to find supplier based on extracted data
-                supplier_name = extracted_data.get('supplier_info', {}).get('name', '').strip()
-                if supplier_name:
+            # Use the InvoiceParser class to extract text and data
+            try:
+                extracted_data = InvoiceParser.parse_invoice(invoice_file)
+                # Try to find supplier based on extracted data if user has a business account
+                if hasattr(request.user, 'owned_business'):
+                    business_account = request.user.owned_business
+                    
+                    # Get supplier name from ICE number
+                    supplier_info = extracted_data.get('supplier_info', {}) or {}
+                    supplier_ice = supplier_info.get('ice')
+                    supplier_name = str(supplier_ice).strip() if supplier_ice else ''
+                    
                     suppliers = Supplier.objects.filter(
                         business_account=business_account,
-                        corporate_name__icontains=supplier_name
+                        ice_number=supplier_name
                     )
                     if suppliers.exists():
                         extracted_data['supplier_id'] = suppliers.first().id
-            
-            return Response(extracted_data, status=status.HTTP_200_OK)
+                
+                # Get customer name from ICE number
+                customer_info = extracted_data.get('customer_info', {}) or {}
+                customer_ice = customer_info.get('ice')
+                customer_name = str(customer_ice).strip() if customer_ice else ''
+                
+                return Response(extracted_data, status=status.HTTP_200_OK)
+                
+            except ValueError as e:
+                return Response(
+                    {"error": str(e)},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+                
         except Exception as e:
-            print(traceback.format_exc())
+            logger.error(f"Expenditure invoice parsing error: {str(e)}\n{traceback.format_exc()}")
             return Response(
-                {"error": f"Failed to parse expenditure invoice: {str(e)}",
-                 "possible_solution": "If the error is related to Tesseract, please install it and ensure it's in your PATH."},
+                {"error": f"Failed to parse expenditure invoice: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    def _extract_expenditure_invoice_data(self, text):
-        """
-        Extract structured data from expenditure invoice text
-        Specifically tailored for expenditure invoices from suppliers
-        """
-        # Default empty data
-        data = {
-            "invoice_number": "",
-            "status": "",
-            "date": "",
-            "due_date": "",
-            "paid_date": "",
-            "supplier_info": {
-                "name": "",
-                "tax_id": "",
-                "address": "",
-                "email": "",
-                "phone": ""
-            },
-            "customer_info": {
-                "name": "",
-                "tax_id": "",
-                "address": "",
-                "reference": "",
-                "email": "",
-                "phone": ""
-            },
-            "line_items": [],
-            "subtotal": None,
-            "tax_amount": None,
-            "tax_rate": None,
-            "total": None,
-            "currency": "$",  # Default currency
-            "invoice_type": "purchase"  # Default to purchase for expenditure invoices
-        }
-        
-        # Extract invoice number - using a more flexible pattern
-        invoice_number_patterns = [
-            r'invoice\s*(?:#|no|number|num)[:\s]*([0-9a-zA-Z\-_/]+)',
-            r'invoice[:\s]*([0-9a-zA-Z\-_/]+)',
-            r'#\s*([0-9a-zA-Z\-_/]+)',
-            r'\binvoice\b.*?([A-Z][0-9]+)',
-            r'(?<!\S)([A-Z][0-9]{6,})(?!\S)'  # Pattern like U45844566
-        ]
-        
-        for pattern in invoice_number_patterns:
-            invoice_number_match = re.search(pattern, text, re.IGNORECASE)
-            if invoice_number_match:
-                data["invoice_number"] = invoice_number_match.group(1).strip()
-                break
-        
-        # Extract invoice status
-        status_match = re.search(r'status[:\s]*(\w+)', text, re.IGNORECASE)
-        if status_match:
-            data["status"] = status_match.group(1).strip().upper()
-        
-        # Extract date formats (DD/MM/YYYY, MM/DD/YYYY, YYYY-MM-DD)
-        date_patterns = [
-            r'date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})',
-            r'date[:\s]*(\d{4}-\d{1,2}-\d{1,2})',
-            r'date:\s*([\d]{1,2}/[\d]{1,2}/[\d]{4})'
-        ]
-        
-        for pattern in date_patterns:
-            date_match = re.search(pattern, text, re.IGNORECASE)
-            if date_match:
-                data["date"] = date_match.group(1).strip()
-                break
-        
-        # Extract due date
-        due_date_patterns = [
-            r'due\s*date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})',
-            r'due\s*date[:\s]*(\d{4}-\d{1,2}-\d{1,2})',
-            r'due\s*date:\s*([\d]{1,2}/[\d]{1,2}/[\d]{4})'
-        ]
-        
-        for pattern in due_date_patterns:
-            due_date_match = re.search(pattern, text, re.IGNORECASE)
-            if due_date_match:
-                data["due_date"] = due_date_match.group(1).strip()
-                break
-        
-        # Extract paid date if available
-        paid_date_patterns = [
-            r'paid\s*date[:\s]*([\d]{1,2}[-/\.][\d]{1,2}[-/\.][\d]{2,4})',
-            r'paid\s*date[:\s]*(\d{4}-\d{1,2}-\d{1,2})',
-            r'paid\s*date:\s*([\d]{1,2}/[\d]{1,2}/[\d]{4})'
-        ]
-        
-        for pattern in paid_date_patterns:
-            paid_date_match = re.search(pattern, text, re.IGNORECASE)
-            if paid_date_match:
-                data["paid_date"] = paid_date_match.group(1).strip()
-                break
-        
-        # Extract supplier name - first look for "From:" section
-        from_section = re.search(r'from[:\s]*\n*([\s\S]*?)(?=\n\s*\n|\nto[:\s]*|\Z)', text, re.IGNORECASE)
-        if from_section:
-            supplier_text = from_section.group(1).strip()
-            lines = supplier_text.split('\n')
-            if lines:
-                data["supplier_info"]["name"] = lines[0].strip()
-                
-                # Try to extract additional supplier info from subsequent lines
-                for line in lines[1:]:
-                    line = line.strip()
-                    # Look for potential tax ID patterns
-                    if re.match(r'^\d+$', line) or 'ice' in line.lower():
-                        data["supplier_info"]["tax_id"] = line
-        
-        # Extract customer info - look for "To:" section
-        to_section = re.search(r'to[:\s]*\n*([\s\S]*?)(?=\n\s*\n|\norder\s+lines|\Z)', text, re.IGNORECASE)
-        if to_section:
-            customer_text = to_section.group(1).strip()
-            lines = customer_text.split('\n')
-            if lines:
-                data["customer_info"]["name"] = lines[0].strip()
-                
-                # Look for email in customer section
-                email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', customer_text)
-                if email_match:
-                    data["customer_info"]["email"] = email_match.group(1).strip()
-                
-                # Try to extract phone number
-                phone_match = re.search(r'tel[:\s]*([0-9\s\-\+]+)', customer_text, re.IGNORECASE)
-                if phone_match:
-                    data["customer_info"]["phone"] = phone_match.group(1).strip()
-        
-        # Extract order lines table
-        line_items = []
-        
-        # Look for tabular data in various formats
-        tables = re.findall(r'(?:description|item|product)\s+(?:quantity|qty)\s+(?:unit|uom)?\s+(?:price|rate)\s+(?:amount|total|sum).*?\n([\s\S]*?)(?=\n\s*\n|\nsubtotal|\ntotal|\Z)', text, re.IGNORECASE)
-        
-        if not tables:  # If no table headers found, try to find ORDER LINES section
-            order_section = re.search(r'order\s+lines.*?\n([\s\S]*?)(?=\n\s*\n|\nsubtotal|\ntotal|\Z)', text, re.IGNORECASE)
-            if order_section:
-                tables = [order_section.group(1).strip()]
-        
-        for table_text in tables:
-            lines = table_text.strip().split('\n')
-            for line in lines:
-                if not line.strip():
-                    continue
-                
-                # Pattern to match: description, quantity, unit, price, amount
-                # Example: "test 2 15 unit $30.00 $450.00"
-                row_match = re.match(r'([^\d]+)\s+(\d+(?:\.\d+)?)\s+(\w+)\s+\$?(\d+\.\d+)\s+\$?(\d+\.\d+)', line)
-                if row_match:
-                    description = row_match.group(1).strip()
-                    quantity = row_match.group(2).strip()
-                    unit = row_match.group(3).strip()
-                    price = row_match.group(4).strip()
-                    amount = row_match.group(5).strip()
-                    
-                    try:
-                        line_items.append({
-                            "description": description,
-                            "quantity": float(quantity),
-                            "unit": unit,
-                            "price": float(price),
-                            "amount": float(amount)
-                        })
-                    except (ValueError, DecimalException, InvalidOperation):
-                        # Skip if conversion fails
-                        continue
-                else:
-                    # Try alternative pattern with just numbers and descriptions
-                    # Look for quantity, price, and amount
-                    qty_match = re.search(r'\b(\d+(?:\.\d+)?)\b', line)
-                    price_match = re.search(r'\$?(\d+\.\d+)', line)
-                    
-                    if qty_match and price_match and line.count('$') >= 1:
-                        try:
-                            # Try to extract description, quantity, price
-                            quantity = float(qty_match.group(1))
-                            price_index = line.find(price_match.group(0))
-                            description = line[:price_index].replace(qty_match.group(0), '', 1).strip()
-                            price = float(price_match.group(1))
-                            
-                            # Check for second price which would be the amount
-                            amount_match = re.search(r'\$?(\d+\.\d+)', line[price_index + len(price_match.group(0)):])
-                            if amount_match:
-                                amount = float(amount_match.group(1))
-                            else:
-                                amount = quantity * price
-                            
-                            line_items.append({
-                                "description": description,
-                                "quantity": quantity,
-                                "unit": "unit",  # Default when not specified
-                                "price": price,
-                                "amount": amount
-                            })
-                        except (ValueError, DecimalException, InvalidOperation, AttributeError):
-                            # Skip if extraction fails
-                            continue
-        
-        data["line_items"] = line_items
-        
-        # Extract totals
-        # Subtotal extraction
-        subtotal_patterns = [
-            r'subtotal[:\s]*\$?(\d+\.\d+)',
-            r'sub[ -]?total[:\s]*\$?(\d+\.\d+)'
-        ]
-        
-        for pattern in subtotal_patterns:
-            subtotal_match = re.search(pattern, text, re.IGNORECASE)
-            if subtotal_match:
-                try:
-                    data["subtotal"] = float(subtotal_match.group(1))
-                    break
-                except (ValueError, DecimalException, InvalidOperation):
-                    pass
-        
-        # VAT/tax extraction with rate
-        tax_patterns = [
-            r'vat\s*(?:\((\d+)%\))?[:\s]*\$?(\d+\.\d+)',
-            r'tax\s*(?:\((\d+)%\))?[:\s]*\$?(\d+\.\d+)'
-        ]
-        
-        for pattern in tax_patterns:
-            tax_match = re.search(pattern, text, re.IGNORECASE)
-            if tax_match:
-                try:
-                    if tax_match.group(1):  # If tax rate is captured
-                        data["tax_rate"] = float(tax_match.group(1))
-                    data["tax_amount"] = float(tax_match.group(2))
-                    break
-                except (ValueError, DecimalException, InvalidOperation):
-                    pass
-        
-        # Look for tax rate separately
-        if data["tax_rate"] is None:
-            tax_rate_match = re.search(r'(?:vat|tax)[:\s]*\((\d+)%\)', text, re.IGNORECASE)
-            if tax_rate_match:
-                try:
-                    data["tax_rate"] = float(tax_rate_match.group(1))
-                except (ValueError, DecimalException, InvalidOperation):
-                    pass
-        
-        # Total extraction
-        total_patterns = [
-            r'total[:\s]*\$?(\d+\.\d+)',
-            r'total amount[:\s]*\$?(\d+\.\d+)',
-            r'amount due[:\s]*\$?(\d+\.\d+)'
-        ]
-        
-        for pattern in total_patterns:
-            total_match = re.search(pattern, text, re.IGNORECASE)
-            if total_match:
-                try:
-                    data["total"] = float(total_match.group(1))
-                    break
-                except (ValueError, DecimalException, InvalidOperation):
-                    pass
-        
-        # If we still don't have the subtotal but have line items, calculate it
-        if data["subtotal"] is None and line_items:
-            try:
-                data["subtotal"] = sum(item["amount"] for item in line_items)
-            except (KeyError, TypeError):
-                pass
-        
-        # If we have subtotal and tax amount but no total, calculate it
-        if data["total"] is None and data["subtotal"] is not None and data["tax_amount"] is not None:
-            data["total"] = data["subtotal"] + data["tax_amount"]
-        
-        # If we have subtotal and tax rate but no tax amount, calculate it
-        if data["tax_amount"] is None and data["subtotal"] is not None and data["tax_rate"] is not None:
-            data["tax_amount"] = data["subtotal"] * (data["tax_rate"] / 100)
-            
-            # And if we don't have total, calculate it too
-            if data["total"] is None:
-                data["total"] = data["subtotal"] + data["tax_amount"]
-        
-        return data
+    # This method is no longer needed as we're using the InvoiceParser class
+    # Keeping it here commented out for reference
+    # def _extract_invoice_data(self, text):
+    #    pass
 
 
 class InvoiceLineItemViewSet(viewsets.ModelViewSet):

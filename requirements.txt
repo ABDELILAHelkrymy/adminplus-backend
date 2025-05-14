@@ -1,7 +1,7 @@
 Django
 gunicorn
 python-decouple==3.8
-django-rest-framework
+djangorestframework==3.14.0
 djangorestframework-simplejwt
 pillow
 drf-yasg
@@ -32,3 +32,8 @@ boto3
 xlsxwriter
 html2text
 PyPDF2
+langdetect
+opencv-python-headless   
+numpy 
+openai>=1.0.0 
+pdfplumber
