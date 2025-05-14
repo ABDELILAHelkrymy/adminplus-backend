@@ -364,3 +364,7 @@ EMAIL_SSL_KEYFILE = None
 TWILIO_ACCOUNT_SID = config('TWILIO_ACCOUNT_SID', default='')
 TWILIO_AUTH_TOKEN = config('TWILIO_AUTH_TOKEN', default='')
 TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER', default='')
+
+
+GPT_USE_GPT_4 = config('USE_GPT_INVOICE_PARSER', default=False, cast=bool)
+GPT_API_KEY = config('OPENAI_API_KEY', default='')

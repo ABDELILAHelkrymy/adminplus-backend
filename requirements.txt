@@ -33,3 +33,7 @@ xlsxwriter
 html2text
 PyPDF2
 langdetect
+opencv-python-headless   
+numpy 
+openai>=1.0.0 
+pdfplumber

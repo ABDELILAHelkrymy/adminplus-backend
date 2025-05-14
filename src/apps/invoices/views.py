@@ -621,13 +621,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             invoice_file = request.FILES['file']
             
-            # Use the InvoiceParser class to extract text from file
+            # Use the new InvoiceParser.parse_invoice method that switches between regex and GPT parser
             try:
-                extracted_text, file_extension = InvoiceParser.extract_text_from_file(invoice_file)
-                
-                # Extract data from the text
-                extracted_data = InvoiceParser.extract_invoice_data(extracted_text)
-                
+                extracted_data = InvoiceParser.parse_invoice(invoice_file)
                 return Response(extracted_data, status=status.HTTP_200_OK)
             except ValueError as e:
                 return Response(
@@ -685,21 +681,27 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             # Use the InvoiceParser class to extract text and data
             try:
-                extracted_text, file_extension = InvoiceParser.extract_text_from_file(invoice_file)
-                extracted_data = InvoiceParser.extract_expenditure_invoice_data(extracted_text)
-                
+                extracted_data = InvoiceParser.parse_invoice(invoice_file)
                 # Try to find supplier based on extracted data if user has a business account
                 if hasattr(request.user, 'owned_business'):
                     business_account = request.user.owned_business
                     
-                    supplier_name = extracted_data.get('supplier_info', {}).get('name', '').strip()
-                    if supplier_name:
-                        suppliers = Supplier.objects.filter(
-                            business_account=business_account,
-                            corporate_name__icontains=supplier_name
-                        )
-                        if suppliers.exists():
-                            extracted_data['supplier_id'] = suppliers.first().id
+                    # Get supplier name from ICE number
+                    supplier_info = extracted_data.get('supplier_info', {}) or {}
+                    supplier_ice = supplier_info.get('ice')
+                    supplier_name = str(supplier_ice).strip() if supplier_ice else ''
+                    
+                    suppliers = Supplier.objects.filter(
+                        business_account=business_account,
+                        ice_number=supplier_name
+                    )
+                    if suppliers.exists():
+                        extracted_data['supplier_id'] = suppliers.first().id
+                
+                # Get customer name from ICE number
+                customer_info = extracted_data.get('customer_info', {}) or {}
+                customer_ice = customer_info.get('ice')
+                customer_name = str(customer_ice).strip() if customer_ice else ''
                 
                 return Response(extracted_data, status=status.HTTP_200_OK)
                 
