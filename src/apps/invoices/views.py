@@ -13,6 +13,7 @@ import traceback
 import logging
 from django.db import models
 from decimal import Decimal, DecimalException, InvalidOperation
+import os
 
 from apps.accounts.models import BusinessAccount
 from .models import (
@@ -519,47 +520,126 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         
         from_email = request.data.get('from_email')
         
+        # Check if we should attach the PDF
+        attach_pdf = request.data.get('attach_pdf', True)
+        logger.info(f"Raw attach_pdf value: {attach_pdf}, type: {type(attach_pdf)}")
+        
+        # Handle different types of attach_pdf values
+        if isinstance(attach_pdf, str):
+            # Convert string 'true'/'false' to boolean
+            attach_pdf = attach_pdf.lower() in ('true', 't', 'yes', 'y', '1')
+        elif isinstance(attach_pdf, bool):
+            # Keep as is if it's already a boolean
+            pass
+        else:
+            # Default to True for any other value
+            attach_pdf = bool(attach_pdf)
+            
+        logger.info(f"Processed attach_pdf value: {attach_pdf}")
+        
         # Get additional attachments
         attachments = []
         if 'additional_attachments' in request.FILES:
             attachments = request.FILES.getlist('additional_attachments')
         
-        # Send the email
-        email_success = send_invoice_email(
-            invoice=invoice,
-            recipient_email=recipient,
-            subject=subject,
-            content=body,
-            from_email=from_email,
-            attachments=attachments
-        )
+        # Check if PDF is available if attachment is requested
+        if attach_pdf and invoice.generated_pdf:
+            from django.core.files.storage import default_storage
+            pdf_exists = False
+            try:
+                if hasattr(invoice.generated_pdf, 'path') and os.path.exists(invoice.generated_pdf.path):
+                    pdf_exists = True
+                    logger.info(f"PDF exists at path: {invoice.generated_pdf.path}")
+                elif hasattr(invoice.generated_pdf, 'name'):
+                    # Use the relative path (name) not the full URL or absolute path
+                    pdf_path = invoice.generated_pdf.name
+                    # Remove any leading slashes to ensure relative path
+                    if pdf_path.startswith('/'):
+                        pdf_path = pdf_path[1:]
+                    
+                    pdf_exists = default_storage.exists(pdf_path)
+                    logger.info(f"PDF exists in storage with name: {pdf_path}, exists={pdf_exists}")
+                
+                if not pdf_exists:
+                    logger.warning(f"PDF attachment requested but file does not exist")
+            except Exception as e:
+                logger.warning(f"Error checking PDF existence: {str(e)}")
         
-        if not email_success:
+        # Send the email
+        try:
+            logger.info(f"Sending email to {recipient} for invoice {invoice.invoice_number} with attach_pdf={attach_pdf}")
+            
+            email_success = send_invoice_email(
+                invoice=invoice,
+                recipient_email=recipient,
+                subject=subject,
+                content=body,
+                from_email=from_email,
+                attachments=attachments,
+                attach_pdf=attach_pdf
+            )
+            
+            if not email_success:
+                # Check if the generated PDF file exists
+                pdf_message = ""
+                if invoice.generated_pdf:
+                    import os
+                    from django.core.files.storage import default_storage
+                    
+                    try:
+                        if hasattr(invoice.generated_pdf, 'path'):
+                            if os.path.exists(invoice.generated_pdf.path):
+                                pdf_message = "PDF file exists but could not be attached."
+                            else:
+                                pdf_message = "PDF file path exists but file not found on disk."
+                        elif default_storage.exists(invoice.generated_pdf.name):
+                            pdf_message = "PDF file exists in storage but could not be attached."
+                        else:
+                            pdf_message = "PDF file reference exists but file not found in storage."
+                    except Exception as e:
+                        pdf_message = f"Error checking PDF file: {str(e)}"
+                else:
+                    pdf_message = "No PDF file has been generated for this invoice."
+                
+                logger.error(f"Email send failure details: {pdf_message}")
+                
+                return Response(
+                    {
+                        "error": "Failed to send email. Please check the logs for more details.",
+                        "pdf_status": pdf_message
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                
+            # Create email log
+            email_log = InvoiceEmailLog.objects.create(
+                invoice=invoice,
+                sent_by=request.user,
+                recipient=recipient,
+                subject=subject,
+                body=body
+            )
+            
+            # Update invoice sent status
+            invoice.sent = True
+            invoice.sent_to = recipient
+            invoice.save()
+            
+            # Return success response with email log details
+            email_log_serializer = InvoiceEmailLogSerializer(email_log)
+            return Response({
+                "status": "Invoice sent by email successfully",
+                "email_log": email_log_serializer.data
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Exception during email sending: {str(e)}")
             return Response(
-                {"error": "Failed to send email. Please check the logs for more details."},
+                {
+                    "error": f"Error during email sending: {str(e)}",
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-        # Create email log
-        email_log = InvoiceEmailLog.objects.create(
-            invoice=invoice,
-            sent_by=request.user,
-            recipient=recipient,
-            subject=subject,
-            body=body
-        )
-        
-        # Update invoice sent status
-        invoice.sent = True
-        invoice.sent_to = recipient
-        invoice.save()
-        
-        # Return success response with email log details
-        email_log_serializer = InvoiceEmailLogSerializer(email_log)
-        return Response({
-            "status": "Invoice sent by email successfully",
-            "email_log": email_log_serializer.data
-        }, status=status.HTTP_200_OK)
         
     @swagger_auto_schema(
         operation_summary="Generate email content",
@@ -635,6 +715,93 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             logger.error(f"Invoice parsing error: {str(e)}\n{traceback.format_exc()}")
             return Response(
                 {"error": f"Failed to parse invoice: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @swagger_auto_schema(
+        operation_summary="Save PDF to invoice",
+        operation_description="Save a generated PDF file to the invoice",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['generated_pdf'],
+            properties={
+                'generated_pdf': openapi.Schema(type=openapi.TYPE_FILE, description='Generated PDF file'),
+            }
+        ),
+        responses={200: openapi.Response(description="PDF saved successfully")},
+    )
+    @action(detail=True, methods=['post'], url_path='save_pdf')
+    def save_pdf(self, request, pk=None):
+        """Save a generated PDF file to the invoice"""
+        invoice = self.get_object()
+        
+        if 'generated_pdf' not in request.FILES:
+            return Response(
+                {"error": "No PDF file provided"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            # Get the uploaded PDF file
+            pdf_file = request.FILES['generated_pdf']
+            
+            # Check if it's a PDF
+            if not pdf_file.name.lower().endswith('.pdf') and not pdf_file.content_type == 'application/pdf':
+                logger.warning(f"File may not be a PDF: name={pdf_file.name}, content_type={pdf_file.content_type}")
+                # We'll still try to save it, but log the warning
+            
+            # Log the filename for debugging
+            logger.info(f"Saving PDF file: {pdf_file.name} for invoice ID: {invoice.id}, size: {pdf_file.size} bytes, content_type: {pdf_file.content_type}")
+            
+            # Ensure the file has a proper extension
+            if not pdf_file.name.lower().endswith('.pdf'):
+                original_name = pdf_file.name
+                pdf_file.name = f"invoice_{invoice.invoice_number}.pdf"
+                logger.info(f"Renamed file from {original_name} to {pdf_file.name}")
+            
+            # Read the file content to ensure it's readable
+            file_content = pdf_file.read()
+            pdf_file.seek(0)  # Reset file pointer
+            
+            logger.info(f"Successfully read {len(file_content)} bytes from uploaded file")
+            
+            # Set the PDF file to the invoice's generated_pdf field
+            invoice.generated_pdf = pdf_file
+            invoice.save()
+            
+            # Try to directly access the file to verify it was saved correctly
+            try:
+                from django.core.files.storage import default_storage
+                # Get the path without any leading slashes
+                storage_path = invoice.generated_pdf.name
+                if storage_path.startswith('/'):
+                    storage_path = storage_path[1:]
+                    
+                if default_storage.exists(storage_path):
+                    logger.info(f"File verified in storage: {storage_path}")
+                    
+                    # Try to read it back
+                    with default_storage.open(storage_path, 'rb') as f:
+                        content = f.read()
+                        logger.info(f"Successfully verified file content ({len(content)} bytes)")
+                else:
+                    logger.warning(f"File not found in storage immediately after save: {storage_path}")
+            except Exception as verify_error:
+                logger.warning(f"Error verifying saved file: {str(verify_error)}")
+            
+            # Return success response with the file name
+            return Response({
+                "status": "PDF saved successfully",
+                "invoice_id": invoice.id,
+                "filename": pdf_file.name,
+                "file_size": pdf_file.size,
+                "storage_path": invoice.generated_pdf.name if invoice.generated_pdf else None
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error saving PDF to invoice: {str(e)}\n{traceback.format_exc()}")
+            return Response(
+                {"error": f"Failed to save PDF: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

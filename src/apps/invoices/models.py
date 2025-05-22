@@ -3,6 +3,10 @@ from django.db import models
 from django.utils import timezone
 from django.core.validators import MinValueValidator
 from decimal import Decimal
+from django.core.files.storage import default_storage
+import boto3
+from botocore.client import Config
+from django.conf import settings
 
 from apps.common.models import BaseModel
 from apps.accounts.models import BusinessAccount
@@ -385,3 +389,16 @@ class TimeEntry(BaseModel):
         if not self.is_billable or not self.project.hourly_rate:
             return Decimal('0.00')
         return self.project.hourly_rate * Decimal(self.hours)
+
+
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+    region_name=settings.AWS_S3_REGION_NAME,
+    config=Config(
+        connect_timeout=5,
+        read_timeout=10,
+        retries={'max_attempts': 2}
+    )
+)
