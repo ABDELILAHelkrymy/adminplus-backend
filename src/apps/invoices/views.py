@@ -720,30 +720,32 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     @swagger_auto_schema(
         operation_summary="Save PDF to invoice",
-        operation_description="Save a generated PDF file to the invoice",
+        operation_description="Save a PDF file to the invoice (either generated PDF or original document)",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=['generated_pdf'],
             properties={
                 'generated_pdf': openapi.Schema(type=openapi.TYPE_FILE, description='Generated PDF file'),
+                'original_document': openapi.Schema(type=openapi.TYPE_FILE, description='Original document file'),
             }
         ),
-        responses={200: openapi.Response(description="PDF saved successfully")},
+        responses={200: openapi.Response(description="File saved successfully")},
     )
     @action(detail=True, methods=['post'], url_path='save_pdf')
     def save_pdf(self, request, pk=None):
-        """Save a generated PDF file to the invoice"""
+        """Save a PDF file to the invoice (either generated PDF or original document)"""
         invoice = self.get_object()
         
-        if 'generated_pdf' not in request.FILES:
+        # Check if either file type is provided
+        if 'generated_pdf' not in request.FILES and 'original_document' not in request.FILES:
             return Response(
-                {"error": "No PDF file provided"},
+                {"error": "No file provided. Either 'generated_pdf' or 'original_document' must be included."},
                 status=status.HTTP_400_BAD_REQUEST
             )
             
         try:
-            # Get the uploaded PDF file
-            pdf_file = request.FILES['generated_pdf']
+            # Determine which file type is being saved
+            file_field = 'generated_pdf' if 'generated_pdf' in request.FILES else 'original_document'
+            pdf_file = request.FILES[file_field]
             
             # Check if it's a PDF
             if not pdf_file.name.lower().endswith('.pdf') and not pdf_file.content_type == 'application/pdf':
@@ -751,12 +753,13 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 # We'll still try to save it, but log the warning
             
             # Log the filename for debugging
-            logger.info(f"Saving PDF file: {pdf_file.name} for invoice ID: {invoice.id}, size: {pdf_file.size} bytes, content_type: {pdf_file.content_type}")
+            logger.info(f"Saving {file_field} file: {pdf_file.name} for invoice ID: {invoice.id}, size: {pdf_file.size} bytes, content_type: {pdf_file.content_type}")
             
             # Ensure the file has a proper extension
+            prefix = "invoice" if file_field == "generated_pdf" else "original"
             if not pdf_file.name.lower().endswith('.pdf'):
                 original_name = pdf_file.name
-                pdf_file.name = f"invoice_{invoice.invoice_number}.pdf"
+                pdf_file.name = f"{prefix}_{invoice.invoice_number}.pdf"
                 logger.info(f"Renamed file from {original_name} to {pdf_file.name}")
             
             # Read the file content to ensure it's readable
@@ -765,15 +768,19 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             logger.info(f"Successfully read {len(file_content)} bytes from uploaded file")
             
-            # Set the PDF file to the invoice's generated_pdf field
-            invoice.generated_pdf = pdf_file
+            # Set the file to the appropriate invoice field
+            if file_field == 'generated_pdf':
+                invoice.generated_pdf = pdf_file
+            else:
+                invoice.original_document = pdf_file
             invoice.save()
             
             # Try to directly access the file to verify it was saved correctly
             try:
                 from django.core.files.storage import default_storage
                 # Get the path without any leading slashes
-                storage_path = invoice.generated_pdf.name
+                stored_file = invoice.generated_pdf if file_field == 'generated_pdf' else invoice.original_document
+                storage_path = stored_file.name
                 if storage_path.startswith('/'):
                     storage_path = storage_path[1:]
                     
@@ -791,17 +798,18 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             # Return success response with the file name
             return Response({
-                "status": "PDF saved successfully",
+                "status": f"{file_field.replace('_', ' ').title()} saved successfully",
                 "invoice_id": invoice.id,
                 "filename": pdf_file.name,
                 "file_size": pdf_file.size,
-                "storage_path": invoice.generated_pdf.name if invoice.generated_pdf else None
+                "file_type": file_field,
+                "storage_path": stored_file.name if stored_file else None
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
-            logger.error(f"Error saving PDF to invoice: {str(e)}\n{traceback.format_exc()}")
+            logger.error(f"Error saving file to invoice: {str(e)}\n{traceback.format_exc()}")
             return Response(
-                {"error": f"Failed to save PDF: {str(e)}"},
+                {"error": f"Failed to save file: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
