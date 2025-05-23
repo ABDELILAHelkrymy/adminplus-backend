@@ -13,6 +13,20 @@ from apps.accounts.models import BusinessAccount
 from apps.users.models import User
 
 
+# Add these helper functions at the top of the file, before any model classes
+def original_document_path(instance, filename):
+    """Generate path for original invoice documents by business account"""
+    return f'business/{instance.business_account.id}_{instance.business_account.business_name}/invoices/original/{filename}'
+
+def generated_pdf_path(instance, filename):
+    """Generate path for generated invoice PDFs by business account"""
+    return f'business/{instance.business_account.id}_{instance.business_account.business_name}/invoices/generated/{filename}'
+
+def invoice_attachment_path(instance, filename):
+    """Generate path for invoice attachments by business account"""
+    return f'business/{instance.invoice.business_account.id}_{instance.invoice.business_account.business_name}/invoices/attachments/{filename}'
+
+
 class Supplier(BaseModel):
     """Model to store supplier information for invoices"""
     business_account = models.ForeignKey(BusinessAccount, on_delete=models.CASCADE, related_name='suppliers')
@@ -254,8 +268,8 @@ class Invoice(BaseModel):
     additional_text_for_pdf = models.TextField(blank=True, null=True)
     
     # Document handling
-    original_document = models.FileField(upload_to='invoices/', null=True, blank=True)
-    generated_pdf = models.FileField(upload_to='invoices/generated/', null=True, blank=True)
+    original_document = models.FileField(upload_to=original_document_path, null=True, blank=True)
+    generated_pdf = models.FileField(upload_to=generated_pdf_path, null=True, blank=True)
     
     def __str__(self):
         return f"{self.invoice_number} - {self.get_invoice_type_display()}"
@@ -314,7 +328,7 @@ class InvoiceLineItem(BaseModel):
 class InvoiceAttachment(BaseModel):
     """Model for additional attachments to an invoice"""
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='attachments')
-    file = models.FileField(upload_to='invoice_attachments/')
+    file = models.FileField(upload_to=invoice_attachment_path)
     description = models.CharField(max_length=255, blank=True, null=True)
     
     def __str__(self):

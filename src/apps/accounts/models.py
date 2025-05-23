@@ -59,7 +59,8 @@ class BusinessAccount(BaseModel):
         Upload logo to S3 and store the file key
         """
         ext = file_data.name.split('.')[-1]
-        file_name = file_name or f"business_logos/{self.id}/{uuid.uuid4()}.{ext}"
+        # Organize logos in business/ID/logo/ directory
+        file_name = file_name or f"business/{self.id}_{self.business_name}/logo/{uuid.uuid4()}.{ext}"
         saved_key = default_storage.save(file_name, ContentFile(file_data.read()))
         self.logo_key = saved_key
         self.save()
@@ -184,7 +185,8 @@ class AccountSettings(BaseModel):
         Upload logo to S3 and store the file key
         """
         ext = file_data.name.split('.')[-1]
-        file_name = file_name or f"settings_logos/{self.business_account.id}/{uuid.uuid4()}.{ext}"
+        # Organize logos in business/ID/settings/logo/ directory
+        file_name = file_name or f"business/{self.business_account.id}_{self.business_account.business_name}/settings/logo/{uuid.uuid4()}.{ext}"
         saved_key = default_storage.save(file_name, ContentFile(file_data.read()))
         self.logo_key = saved_key
         self.save()

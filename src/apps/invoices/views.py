@@ -718,18 +718,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    @swagger_auto_schema(
-        operation_summary="Save PDF to invoice",
-        operation_description="Save a PDF file to the invoice (either generated PDF or original document)",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                'generated_pdf': openapi.Schema(type=openapi.TYPE_FILE, description='Generated PDF file'),
-                'original_document': openapi.Schema(type=openapi.TYPE_FILE, description='Original document file'),
-            }
-        ),
-        responses={200: openapi.Response(description="File saved successfully")},
-    )
     @action(detail=True, methods=['post'], url_path='save_pdf')
     def save_pdf(self, request, pk=None):
         """Save a PDF file to the invoice (either generated PDF or original document)"""
@@ -755,12 +743,26 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             # Log the filename for debugging
             logger.info(f"Saving {file_field} file: {pdf_file.name} for invoice ID: {invoice.id}, size: {pdf_file.size} bytes, content_type: {pdf_file.content_type}")
             
-            # Ensure the file has a proper extension
+            # Get explicit document_type parameter if provided
+            document_type = request.data.get('document_type', file_field)
+            logger.info(f"Document type from request: {document_type}, defaulting to: {file_field}")
+            
+            # Use the explicit document_type if different from the file field
+            if document_type != file_field and document_type in ['generated_pdf', 'original_document']:
+                logger.info(f"Using explicit document_type '{document_type}' instead of file field '{file_field}'")
+                file_field = document_type
+            
+            # Ensure the file has a proper extension and includes invoice ID
             prefix = "invoice" if file_field == "generated_pdf" else "original"
             if not pdf_file.name.lower().endswith('.pdf'):
                 original_name = pdf_file.name
-                pdf_file.name = f"{prefix}_{invoice.invoice_number}.pdf"
+                pdf_file.name = f"{prefix}_{invoice.invoice_number}_{invoice.id}.pdf"
                 logger.info(f"Renamed file from {original_name} to {pdf_file.name}")
+            elif not pdf_file.name.lower().endswith(f"_{invoice.id}.pdf"):
+                original_name = pdf_file.name
+                base_name = pdf_file.name[:-4]  # Remove .pdf extension
+                pdf_file.name = f"{base_name}_{invoice.id}.pdf"
+                logger.info(f"Added invoice ID to file name: {original_name} → {pdf_file.name}")
             
             # Read the file content to ensure it's readable
             file_content = pdf_file.read()
@@ -768,18 +770,42 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             
             logger.info(f"Successfully read {len(file_content)} bytes from uploaded file")
             
+            # Get the current field value before setting the new value
+            old_value = getattr(invoice, file_field)
+            if old_value:
+                logger.info(f"Current {file_field} value: {old_value.name}")
+            else:
+                logger.info(f"No current {file_field} value (null)")
+            
             # Set the file to the appropriate invoice field
             if file_field == 'generated_pdf':
                 invoice.generated_pdf = pdf_file
             else:
                 invoice.original_document = pdf_file
-            invoice.save()
+                
+            # Force save to ensure the database is updated
+            invoice.save(update_fields=[file_field])
+            
+            # Reload the invoice to verify changes
+            invoice.refresh_from_db()
+            new_value = getattr(invoice, file_field)
+            if new_value:
+                logger.info(f"Updated {file_field} value: {new_value.name}")
+            else:
+                logger.warning(f"Updated {file_field} is still null after save!")
             
             # Try to directly access the file to verify it was saved correctly
             try:
                 from django.core.files.storage import default_storage
                 # Get the path without any leading slashes
-                stored_file = invoice.generated_pdf if file_field == 'generated_pdf' else invoice.original_document
+                stored_file = getattr(invoice, file_field)
+                if not stored_file:
+                    logger.error(f"Field {file_field} is null after save!")
+                    return Response(
+                        {"error": f"Failed to save {file_field}. Field is null after save."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                    
                 storage_path = stored_file.name
                 if storage_path.startswith('/'):
                     storage_path = storage_path[1:]
