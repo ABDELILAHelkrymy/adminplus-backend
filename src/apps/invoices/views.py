@@ -583,10 +583,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 # Check if the generated PDF file exists
                 pdf_message = ""
                 if invoice.generated_pdf:
-                    import os
-                    from django.core.files.storage import default_storage
-                    
                     try:
+                        print(f"Checking if PDF file exists for invoice {invoice.id}")
                         if hasattr(invoice.generated_pdf, 'path'):
                             if os.path.exists(invoice.generated_pdf.path):
                                 pdf_message = "PDF file exists but could not be attached."
