@@ -421,8 +421,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     def get_serializer_class(self):
         """Return different serializer for list and detail"""
-        if self.action == 'list':
-            return InvoiceSerializer
+        # if self.action == 'list':
+        #     return InvoiceSerializer
         return InvoiceDetailSerializer
 
     def get_queryset(self):
