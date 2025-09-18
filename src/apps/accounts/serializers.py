@@ -9,12 +9,17 @@ User = get_user_model()
 
 
 class AccountSettingsSerializer(serializers.ModelSerializer):
+    logo_url = serializers.SerializerMethodField()
+
+    def get_logo_url(self, obj):
+        return obj.get_logo_url()
+
     class Meta:
         model = AccountSettings
         fields = [
-            'id', 'business_account', 'currency', 'language', 
-            'primary_language', 'primary_color', 'secondary_color',
-            'logo', 'notification_emails', 'two_factor_auth',
+            'id', 'currency', 'language', 'primary_language',
+            'primary_color', 'secondary_color', 'logo_url',
+            'notification_emails', 'two_factor_auth', 'vat_rate'
         ]
         read_only_fields = ['created_at', 'updated_at', 'business_account']
     
@@ -33,6 +38,10 @@ class AccountSettingsSerializer(serializers.ModelSerializer):
 class BusinessAccountSerializer(serializers.ModelSerializer):
     primary_user = serializers.PrimaryKeyRelatedField(read_only=True)
     settings = AccountSettingsSerializer(read_only=True)
+    logo_url = serializers.SerializerMethodField()
+
+    def get_logo_url(self, obj):
+        return obj.get_logo_url()
 
     class Meta:
         model = BusinessAccount
@@ -40,7 +49,7 @@ class BusinessAccountSerializer(serializers.ModelSerializer):
             'id', 'business_name', 'tax_number', 'business_address', 
             'phone_number', 'website', 'primary_user',
             'ice_number', 'commercial_register', 'country', 'street',
-            'street_number', 'po_box', 'zip_code', 'town_city', 'logo',
+            'street_number', 'po_box', 'zip_code', 'town_city', 'logo_url',
             'created_at', 'updated_at', 'settings'
         ]
         read_only_fields = ['created_at', 'updated_at']

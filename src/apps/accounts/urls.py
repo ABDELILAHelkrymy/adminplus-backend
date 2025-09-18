@@ -4,12 +4,14 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AdminRegistrationView,
     AccountSettingsViewSet,
-    BusinessAccountInfoView
+    BusinessAccountInfoView,
+    BusinessAccountViewSet
 )
 
 # Create a router for ViewSets
 router = DefaultRouter()
-router.register(r'settings', AccountSettingsViewSet, basename='account-settings')
+router.register(r'business-accounts', BusinessAccountViewSet, basename='business-account')
+router.register(r'account-settings', AccountSettingsViewSet, basename='account-settings')
 
 # API URLs
 urlpatterns = [

@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'drf_yasg',
     'corsheaders',
     'django_filters',
+    'storages',
 
     # Local apps
     'apps.users',
@@ -368,3 +369,15 @@ TWILIO_PHONE_NUMBER = config('TWILIO_PHONE_NUMBER', default='')
 
 GPT_USE_GPT_4 = config('USE_GPT_INVOICE_PARSER', default=False, cast=bool)
 GPT_API_KEY = config('OPENAI_API_KEY', default='')
+
+
+DEFAULT_FILE_STORAGE = config('DEFAULT_FILE_STORAGE', default='storages.backends.s3boto3.S3Boto3Storage')
+
+AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID', default='')
+AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY', default='')
+AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME', default='')
+AWS_S3_REGION_NAME = "eu-north-1"
+AWS_S3_FILE_OVERWRITE = False  # Prevent overwriting files with same name
+AWS_QUERYSTRING_AUTH = True    # Enables signed URL protection
+AWS_DEFAULT_ACL = None  
+AWS_S3_SIGNATURE_VERSION = 's3v4'
