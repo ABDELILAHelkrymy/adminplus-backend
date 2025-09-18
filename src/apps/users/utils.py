@@ -62,9 +62,10 @@ def send_password_reset_email(user):
 def send_verification_email(user):
     """
     Send an email verification link to the user.
-    Uses direct SMTP connection for better debugging.
+    Uses direct SMTP connection with timeout handling.
     """
     import smtplib
+    import socket
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
     
@@ -102,7 +103,7 @@ The AdminPlus Accounting Team
         """
         msg.attach(MIMEText(body, 'plain'))
         
-        # Connect to the SMTP server directly
+        # Connect to the SMTP server with timeout
         email_logger.debug(f"Connecting to SMTP server: {settings.EMAIL_HOST}:{settings.EMAIL_PORT}", extra={
             'to': user.email,
             'from': settings.EMAIL_HOST_USER,
@@ -110,7 +111,8 @@ The AdminPlus Accounting Team
             'port': settings.EMAIL_PORT
         })
         
-        server = smtplib.SMTP(settings.EMAIL_HOST, settings.EMAIL_PORT)
+        # Set timeout for SMTP connection (30 seconds)
+        server = smtplib.SMTP(settings.EMAIL_HOST, settings.EMAIL_PORT, timeout=30)
         server.set_debuglevel(0)  # Disable debugging output
         
         # Start TLS encryption if configured
@@ -143,14 +145,15 @@ The AdminPlus Accounting Team
             'from': settings.EMAIL_HOST_USER
         })
         return True
-    except Exception as e:
-        email_logger.error(f"Error sending verification email via SMTP: {str(e)}", extra={
+        
+    except (smtplib.SMTPException, socket.timeout, socket.error) as e:
+        email_logger.error(f"SMTP/Network error sending verification email: {str(e)}", extra={
             'to': user.email,
             'from': settings.EMAIL_HOST_USER,
             'error': str(e)
         })
         
-        # Try fallback to Django's send_mail
+        # Try fallback to Django's send_mail with timeout
         email_logger.info("Attempting fallback to Django's send_mail", extra={
             'to': user.email,
             'from': settings.EMAIL_HOST_USER
@@ -189,6 +192,13 @@ The AdminPlus Accounting Team
                 'error': str(fallback_error)
             })
             return False
+    except Exception as e:
+        email_logger.error(f"Unexpected error sending verification email: {str(e)}", extra={
+            'to': user.email,
+            'from': settings.EMAIL_HOST_USER,
+            'error': str(e)
+        })
+        return False
 
 
 def send_otp_via_sms(phone_number, otp):

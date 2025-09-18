@@ -56,7 +56,7 @@ SECURE_HSTS_PRELOAD = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 USE_X_FORWARDED_HOST = True
 
-# Email
+# Email configuration with timeout handling
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
 EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
@@ -65,6 +65,13 @@ EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER', default='')
 EMAIL_FROM = config('EMAIL_HOST_USER', default='')
+
+# Add email timeout settings
+EMAIL_TIMEOUT = 30  # 30 seconds timeout
+EMAIL_USE_SSL = False  # Set to True if using port 465
+
+# Gunicorn timeout settings
+GUNICORN_TIMEOUT = 120  # Increase worker timeout
 
 # Logging configuration for email debugging
 LOGGING = {
