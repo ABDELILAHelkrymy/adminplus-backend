@@ -3,10 +3,28 @@ from django.db import models
 from django.utils import timezone
 from django.core.validators import MinValueValidator
 from decimal import Decimal
+from django.core.files.storage import default_storage
+import boto3
+from botocore.client import Config
+from django.conf import settings
 
 from apps.common.models import BaseModel
 from apps.accounts.models import BusinessAccount
 from apps.users.models import User
+
+
+# Add these helper functions at the top of the file, before any model classes
+def original_document_path(instance, filename):
+    """Generate path for original invoice documents by business account"""
+    return f'business/{instance.business_account.id}_{instance.business_account.business_name}/invoices/original/{filename}'
+
+def generated_pdf_path(instance, filename):
+    """Generate path for generated invoice PDFs by business account"""
+    return f'business/{instance.business_account.id}_{instance.business_account.business_name}/invoices/generated/{filename}'
+
+def invoice_attachment_path(instance, filename):
+    """Generate path for invoice attachments by business account"""
+    return f'business/{instance.invoice.business_account.id}_{instance.invoice.business_account.business_name}/invoices/attachments/{filename}'
 
 
 class Supplier(BaseModel):
@@ -250,8 +268,8 @@ class Invoice(BaseModel):
     additional_text_for_pdf = models.TextField(blank=True, null=True)
     
     # Document handling
-    original_document = models.FileField(upload_to='invoices/', null=True, blank=True)
-    generated_pdf = models.FileField(upload_to='invoices/generated/', null=True, blank=True)
+    original_document = models.FileField(upload_to=original_document_path, null=True, blank=True)
+    generated_pdf = models.FileField(upload_to=generated_pdf_path, null=True, blank=True)
     
     def __str__(self):
         return f"{self.invoice_number} - {self.get_invoice_type_display()}"
@@ -310,7 +328,7 @@ class InvoiceLineItem(BaseModel):
 class InvoiceAttachment(BaseModel):
     """Model for additional attachments to an invoice"""
     invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, related_name='attachments')
-    file = models.FileField(upload_to='invoice_attachments/')
+    file = models.FileField(upload_to=invoice_attachment_path)
     description = models.CharField(max_length=255, blank=True, null=True)
     
     def __str__(self):
@@ -385,3 +403,16 @@ class TimeEntry(BaseModel):
         if not self.is_billable or not self.project.hourly_rate:
             return Decimal('0.00')
         return self.project.hourly_rate * Decimal(self.hours)
+
+
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+    region_name=settings.AWS_S3_REGION_NAME,
+    config=Config(
+        connect_timeout=5,
+        read_timeout=10,
+        retries={'max_attempts': 2}
+    )
+)
