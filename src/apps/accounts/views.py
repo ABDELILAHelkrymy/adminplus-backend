@@ -138,13 +138,21 @@ class AccountSettingsViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        # Short-circuit for Swagger schema generation
+        if getattr(self, 'swagger_fake_view', False):
+            return AccountSettings.objects.none()
+        
+        user = self.request.user
+        
+        # Check if user is authenticated
+        if not user.is_authenticated:
+            return AccountSettings.objects.none()
+        
         """
         Filter settings to only show those related to the user's business account
         """
-        user = self.request.user
         if user.user_roles.filter(system_role='admin').exists():
-            # Admin users can see their own business settings
-            return AccountSettings.objects.filter(business_account__primary_user=user)
+            return AccountSettings.objects.all()
         else:
             # Other users can see settings of business accounts they belong to
             return AccountSettings.objects.filter(business_account__internal_users=user)

@@ -43,14 +43,7 @@ class BankStatementDetailSerializer(serializers.ModelSerializer):
 
 
 class TransactionCategorySerializer(serializers.ModelSerializer):
-    """Serializer for transaction categories"""
-    parent_name = serializers.CharField(source='parent_category.name', read_only=True)
-    subcategories_count = serializers.SerializerMethodField()
-    
     class Meta:
         model = TransactionCategory
-        exclude = ['business_account']
-        read_only_fields = ['id', 'created_at', 'updated_at']
-    
-    def get_subcategories_count(self, obj):
-        return obj.subcategories.count()
+        fields = '__all__'
+        ref_name = 'BankStatementTransactionCategory'  # Add this line

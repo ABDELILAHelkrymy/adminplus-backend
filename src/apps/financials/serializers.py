@@ -3,20 +3,10 @@ from .models import TransactionCategory, FinancialAccount, Transaction, Recurrin
 
 
 class TransactionCategorySerializer(serializers.ModelSerializer):
-    parent_name = serializers.SerializerMethodField(read_only=True)
-    
     class Meta:
         model = TransactionCategory
-        fields = [
-            'id', 'name', 'description', 'parent', 'parent_name',
-            'is_expense', 'is_system', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'is_system', 'created_at', 'updated_at']
-    
-    def get_parent_name(self, obj):
-        if obj.parent:
-            return obj.parent.name
-        return None
+        fields = '__all__'
+        ref_name = 'FinancialTransactionCategory'  # Add this line
 
 
 class FinancialAccountSerializer(serializers.ModelSerializer):
@@ -84,4 +74,4 @@ class RecurringTransactionSerializer(serializers.ModelSerializer):
     def get_financial_account_name(self, obj):
         if obj.financial_account:
             return obj.financial_account.name
-        return None 
+        return None
