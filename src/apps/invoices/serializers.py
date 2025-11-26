@@ -123,7 +123,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         model = Invoice
         exclude = ['business_account', 'supplier_iban', 'about', 'comments', 'internal_notes', 
                   'additional_text_for_pdf', 'original_document', 'generated_pdf']
-        read_only_fields = ['id', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'invoice_number', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at']
     
     def get_supplier_name(self, obj):
         return obj.supplier.corporate_name if obj.supplier else None
@@ -161,7 +161,7 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         exclude = ['business_account']
-        read_only_fields = ['id', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'invoice_number', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at']
     
     def get_supplier_name(self, obj):
         return obj.supplier.corporate_name if obj.supplier else None

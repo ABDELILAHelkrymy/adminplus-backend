@@ -225,7 +225,7 @@ class Invoice(BaseModel):
         ('credit_note', 'Credit Note'),
     ]
     invoice_type = models.CharField(max_length=20, choices=INVOICE_TYPE_CHOICES)
-    invoice_number = models.CharField(max_length=50)
+    invoice_number = models.CharField(max_length=50, editable=False, blank=True)
     
     # Business account owner of this invoice record
     business_account = models.ForeignKey(BusinessAccount, on_delete=models.CASCADE, related_name='invoices')
@@ -273,6 +273,49 @@ class Invoice(BaseModel):
     
     def __str__(self):
         return f"{self.invoice_number} - {self.get_invoice_type_display()}"
+    
+    def save(self, *args, **kwargs):
+        """Override save to auto-generate invoice number"""
+        # Only generate number if it's a new invoice without a number
+        if not self.invoice_number:
+            # Get the current year and month for the prefix
+            from datetime import datetime
+            current_year = datetime.now().year
+            current_month = datetime.now().month
+            
+            # Define prefix based on invoice type
+            if self.invoice_type == 'purchase':
+                prefix = f"ACH-{current_year}{current_month:02d}"
+            elif self.invoice_type == 'sale':
+                prefix = f"VENTE-{current_year}{current_month:02d}"
+            elif self.invoice_type == 'credit_note':
+                prefix = f"AV-{current_year}{current_month:02d}"
+            else:  # invoice or default
+                prefix = f"FAC-{current_year}{current_month:02d}"
+            
+            # Get the max number for this business account, invoice type and period
+            max_invoice = Invoice.objects.filter(
+                business_account=self.business_account,
+                invoice_type=self.invoice_type,
+                invoice_number__startswith=prefix
+            ).order_by('-invoice_number').first()
+            
+            if max_invoice:
+                # Extract the sequence number from the last invoice
+                try:
+                    last_sequence = int(max_invoice.invoice_number.split('-')[-1])
+                    new_sequence = last_sequence + 1
+                except (ValueError, IndexError):
+                    # If parsing fails, start from 1
+                    new_sequence = 1
+            else:
+                # First invoice of this type for this period
+                new_sequence = 1
+            
+            # Generate the new invoice number with zero-padding (4 digits)
+            self.invoice_number = f"{prefix}-{new_sequence:04d}"
+        
+        super().save(*args, **kwargs)
     
     def calculate_totals(self):
         """Calculate subtotal, VAT amount, and total from line items"""
