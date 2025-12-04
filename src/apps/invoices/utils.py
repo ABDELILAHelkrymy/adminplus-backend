@@ -61,11 +61,17 @@ def send_invoice_email(invoice, recipient_email, subject, content, from_email=No
             pdf_filename = f'invoice_{invoice.invoice_number}.pdf'
             
             try:
-                # Check if we're using S3 storage first (most likely scenario for this deployment)
+                # Optimized PDF retrieval - try the most likely method first
+                # Clean up the key/path
+                pdf_key = invoice.generated_pdf.name
+                if pdf_key.startswith('/'):
+                    pdf_key = pdf_key[1:]
+                
+                # Check if we're using S3 storage
                 if hasattr(settings, 'AWS_STORAGE_BUCKET_NAME') and settings.AWS_STORAGE_BUCKET_NAME:
-                    logger.info("Detected S3 storage configuration, trying S3 methods first")
+                    logger.info(f"Using S3 storage for PDF: {pdf_key}")
                     
-                    # Method 1: Try direct S3 access
+                    # Direct S3 access - fastest method
                     try:
                         s3_client = boto3.client(
                             's3',
@@ -74,97 +80,48 @@ def send_invoice_email(invoice, recipient_email, subject, content, from_email=No
                             region_name=settings.AWS_S3_REGION_NAME
                         )
                         
-                        # Clean up the key to avoid absolute path issues
-                        s3_key = invoice.generated_pdf.name
-                        if s3_key.startswith('/'):
-                            s3_key = s3_key[1:]
-                        
-                        # Get the file directly from S3
-                        logger.info(f"Trying direct S3 access for bucket: {settings.AWS_STORAGE_BUCKET_NAME}, key: {s3_key}")
                         response = s3_client.get_object(
                             Bucket=settings.AWS_STORAGE_BUCKET_NAME,
-                            Key=s3_key
+                            Key=pdf_key
                         )
                         pdf_content = response['Body'].read()
-                        logger.info(f"Successfully read PDF content using direct S3 access, size: {len(pdf_content)} bytes")
+                        logger.info(f"PDF retrieved from S3, size: {len(pdf_content)} bytes")
                     except Exception as s3_error:
-                        logger.warning(f"Direct S3 access failed: {str(s3_error)}")
-                    
-                    # Method 2: Try to download from the signed URL if S3 direct access failed
-                    if pdf_content is None and hasattr(invoice.generated_pdf, 'url'):
-                        try:
-                            pdf_url = invoice.generated_pdf.url
-                            logger.info(f"Attempting to download PDF from S3 URL: {pdf_url}")
-                            
-                            # Use requests with proper headers for S3
-                            response = requests.get(pdf_url, timeout=30)
-                            if response.status_code == 200:
-                                pdf_content = response.content
-                                logger.info(f"Successfully downloaded PDF from S3 URL, size: {len(pdf_content)} bytes")
-                            else:
-                                logger.warning(f"Failed to download PDF from S3 URL, status code: {response.status_code}")
-                        except Exception as url_error:
-                            logger.warning(f"Failed to download PDF from S3 URL: {str(url_error)}")
+                        logger.error(f"S3 access failed: {str(s3_error)}")
+                        # Fallback: Try signed URL with shorter timeout
+                        if hasattr(invoice.generated_pdf, 'url'):
+                            try:
+                                response = requests.get(invoice.generated_pdf.url, timeout=10)
+                                if response.status_code == 200:
+                                    pdf_content = response.content
+                                    logger.info(f"PDF retrieved from S3 URL, size: {len(pdf_content)} bytes")
+                            except Exception as url_error:
+                                logger.error(f"S3 URL download failed: {str(url_error)}")
                 
                 else:
-                    # Local storage methods (fallback for non-S3 deployments)
-                    logger.info("Using local storage methods")
+                    # Local storage
+                    logger.info(f"Using local storage for PDF: {pdf_key}")
                     
-                    # Method 1: Try direct file access (for local storage)
+                    # Try direct file access first (fastest for local)
                     if hasattr(invoice.generated_pdf, 'path'):
                         try:
                             file_path = invoice.generated_pdf.path
                             if os.path.exists(file_path):
                                 with open(file_path, 'rb') as f:
                                     pdf_content = f.read()
-                                logger.info(f"Successfully read PDF content from file path: {file_path}")
-                            else:
-                                logger.warning(f"PDF file path exists but file not found: {file_path}")
+                                logger.info(f"PDF read from path, size: {len(pdf_content)} bytes")
                         except Exception as file_error:
-                            logger.warning(f"Failed to read PDF file directly: {str(file_error)}")
+                            logger.error(f"File access failed: {str(file_error)}")
                     
-                    # Method 2: Try through Django storage
-                    if pdf_content is None and hasattr(invoice.generated_pdf, 'name'):
+                    # Fallback: Django storage API
+                    if pdf_content is None:
                         try:
-                            # Get the file name without any leading slashes to avoid absolute path issues
-                            pdf_path = invoice.generated_pdf.name
-                            if pdf_path.startswith('/'):
-                                pdf_path = pdf_path[1:]
-                                
-                            logger.info(f"Attempting to open file with default_storage: {pdf_path}")
-                            
-                            if default_storage.exists(pdf_path):
-                                with default_storage.open(pdf_path, 'rb') as f:
+                            if default_storage.exists(pdf_key):
+                                with default_storage.open(pdf_key, 'rb') as f:
                                     pdf_content = f.read()
-                                logger.info(f"Successfully read PDF content using default_storage: {pdf_path}")
-                            else:
-                                logger.warning(f"PDF file not found in storage: {pdf_path}")
+                                logger.info(f"PDF read from storage, size: {len(pdf_content)} bytes")
                         except Exception as storage_error:
-                            logger.warning(f"Failed to read PDF using default_storage: {str(storage_error)}")
-                    
-                    # Method 3: Try to get the file through a public URL if available
-                    if pdf_content is None and hasattr(invoice.generated_pdf, 'url'):
-                        try:
-                            pdf_url = invoice.generated_pdf.url
-                            # If the URL is relative, prepend the base URL
-                            if pdf_url.startswith('/'):
-                                if hasattr(settings, 'SITE_URL'):
-                                    base_url = f"{settings.SITE_URL.rstrip('/')}"
-                                    pdf_url = f"{base_url}{pdf_url}"
-                                else:
-                                    logger.warning("PDF URL is relative but SITE_URL not configured")
-                                    pdf_url = None
-                            
-                            if pdf_url:
-                                logger.info(f"Attempting to download PDF from URL: {pdf_url}")
-                                response = requests.get(pdf_url, timeout=30)
-                                if response.status_code == 200:
-                                    pdf_content = response.content
-                                    logger.info(f"Successfully downloaded PDF from URL, size: {len(pdf_content)} bytes")
-                                else:
-                                    logger.warning(f"Failed to download PDF from URL, status code: {response.status_code}")
-                        except Exception as url_error:
-                            logger.warning(f"Failed to download PDF from URL: {str(url_error)}")
+                            logger.error(f"Storage access failed: {str(storage_error)}")
                 
                 # If we got the content, attach it
                 if pdf_content and len(pdf_content) > 0:
