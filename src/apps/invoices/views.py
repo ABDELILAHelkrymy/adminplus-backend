@@ -416,8 +416,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['invoice_number', 'reference', 'supplier__corporate_name', 'customer__corporate_name']
-    ordering_fields = ['date', 'due_date', 'created_at', 'total']
-    filterset_fields = ['invoice_type', 'is_paid', 'category', 'project', 'supplier', 'customer']
+    ordering_fields = ['date', 'due_date', 'created_at', 'total', 'status']
+    filterset_fields = ['invoice_type', 'is_paid', 'status', 'sent', 'category', 'project', 'supplier', 'customer']
 
     def get_serializer_class(self):
         """Return different serializer for list and detail"""
@@ -472,6 +472,23 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice = self.get_object()
         invoice.mark_as_paid()
         return Response({"status": "Invoice marked as paid"}, status=status.HTTP_200_OK)
+    
+    @swagger_auto_schema(
+        operation_summary="Get overdue invoices",
+        operation_description="Get all overdue invoices for the user's business account",
+        responses={200: openapi.Response(description="List of overdue invoices")},
+    )
+    @action(detail=False, methods=['get'])
+    def overdue(self, request):
+        """Get all overdue invoices"""
+        today = timezone.now().date()
+        queryset = self.get_queryset().filter(
+            is_paid=False,
+            due_date__lt=today
+        )
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
     
     @swagger_auto_schema(
         operation_summary="Send invoice by email",
@@ -618,9 +635,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 body=body
             )
             
-            # Update invoice sent status
+            # Update invoice sent status and timestamp
             invoice.sent = True
             invoice.sent_to = recipient
+            invoice.sent_date = timezone.now()
             invoice.save()
             
             # Return success response with email log details

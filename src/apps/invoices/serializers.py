@@ -116,6 +116,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
     project_name = serializers.SerializerMethodField()
     payment_method_name = serializers.SerializerMethodField()
     invoice_type_display = serializers.CharField(source='get_invoice_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
     supplier_details = SupplierSerializer(source='supplier', read_only=True)
     customer_details = CustomerSerializer(source='customer', read_only=True)
     
@@ -123,7 +125,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
         model = Invoice
         exclude = ['business_account', 'supplier_iban', 'about', 'comments', 'internal_notes', 
                   'additional_text_for_pdf', 'original_document', 'generated_pdf']
-        read_only_fields = ['id', 'invoice_number', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'invoice_number', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at', 'status']
     
     def get_supplier_name(self, obj):
         return obj.supplier.corporate_name if obj.supplier else None
@@ -149,6 +151,8 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
     project_name = serializers.SerializerMethodField()
     payment_method_name = serializers.SerializerMethodField()
     invoice_type_display = serializers.CharField(source='get_invoice_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
     line_items = InvoiceLineItemSerializer(many=True, read_only=True)
     attachments = InvoiceAttachmentSerializer(many=True, read_only=True)
     email_logs = InvoiceEmailLogSerializer(many=True, read_only=True)
@@ -161,7 +165,7 @@ class InvoiceDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Invoice
         exclude = ['business_account']
-        read_only_fields = ['id', 'invoice_number', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'invoice_number', 'subtotal', 'vat_amount', 'total', 'created_at', 'updated_at', 'status']
     
     def get_supplier_name(self, obj):
         return obj.supplier.corporate_name if obj.supplier else None

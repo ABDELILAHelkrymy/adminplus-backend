@@ -224,8 +224,26 @@ class Invoice(BaseModel):
         ('invoice', 'Invoice'),
         ('credit_note', 'Credit Note'),
     ]
+    
+    # Payment status choices - separate from delivery (sent) status
+    PAYMENT_STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('unpaid', 'Unpaid'),
+        ('overdue', 'Overdue'),
+        ('paid', 'Paid'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
     invoice_type = models.CharField(max_length=20, choices=INVOICE_TYPE_CHOICES)
     invoice_number = models.CharField(max_length=50, editable=False, blank=True)
+    
+    # Payment status (separate from delivery/sent status)
+    status = models.CharField(
+        max_length=20,
+        choices=PAYMENT_STATUS_CHOICES,
+        default='draft',
+        help_text='Payment status of the invoice'
+    )
     
     # Business account owner of this invoice record
     business_account = models.ForeignKey(BusinessAccount, on_delete=models.CASCADE, related_name='invoices')
@@ -260,9 +278,19 @@ class Invoice(BaseModel):
     supplier_iban = models.CharField(max_length=34, blank=True, null=True)
     about = models.TextField(blank=True, null=True)
     
-    # Additional information
-    sent = models.BooleanField(default=False)
+    # Delivery tracking (separate from payment status)
+    sent = models.BooleanField(
+        default=False,
+        help_text='Whether invoice has been sent/delivered to customer'
+    )
     sent_to = models.EmailField(blank=True, null=True)
+    sent_date = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text='When the invoice was sent to customer'
+    )
+    
+    # Additional information
     comments = models.TextField(blank=True, null=True)
     internal_notes = models.TextField(blank=True, null=True)
     additional_text_for_pdf = models.TextField(blank=True, null=True)
@@ -315,7 +343,29 @@ class Invoice(BaseModel):
             # Generate the new invoice number with zero-padding (4 digits)
             self.invoice_number = f"{prefix}-{new_sequence:04d}"
         
+        # Auto-calculate payment status based on payment state and due date
+        # Only auto-update status if not manually set to 'cancelled'
+        if self.status != 'cancelled':
+            if self.is_paid:
+                self.status = 'paid'
+            elif self.sent:
+                # Once sent, it's no longer a draft - check if overdue or unpaid
+                if self.due_date and timezone.now().date() > self.due_date:
+                    self.status = 'overdue'
+                else:
+                    self.status = 'unpaid'
+            # If not sent, keep as draft (don't auto-update)
+        
         super().save(*args, **kwargs)
+    
+    @property
+    def is_overdue(self):
+        """Check if invoice is overdue"""
+        return (
+            not self.is_paid and 
+            self.due_date and 
+            timezone.now().date() > self.due_date
+        )
     
     def calculate_totals(self):
         """Calculate subtotal, VAT amount, and total from line items"""
@@ -329,6 +379,7 @@ class Invoice(BaseModel):
         """Mark invoice as paid with the given date or current date"""
         self.is_paid = True
         self.paid_date = paid_date or timezone.now().date()
+        self.status = 'paid'  # Explicitly set status to paid
         self.save()
 
 
