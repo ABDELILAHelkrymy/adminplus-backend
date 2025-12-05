@@ -935,6 +935,206 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @swagger_auto_schema(
+        operation_summary="Batch parse expenditure invoice files",
+        operation_description="Extract data from multiple uploaded expenditure invoice files (max 20 files)",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['files'],
+            properties={
+                'files': openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(type=openapi.TYPE_FILE),
+                    description='Expenditure invoice files (PDF, JPG, PNG) - max 20 files'
+                ),
+            }
+        ),
+        responses={
+            200: openapi.Response(description="Array of extracted data from expenditure invoices"),
+            400: openapi.Response(description="Invalid request (too many files or missing files)"),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='batch-parse-expenditure-invoices')
+    def batch_parse_expenditure_invoices(self, request):
+        """
+        Extract data from multiple uploaded expenditure invoice files
+        Maximum 20 files per batch
+        Returns array with success/error status for each file
+        """
+        try:
+            # Check dependencies
+            is_tesseract_installed, is_poppler_installed = InvoiceParser.check_dependencies()
+            
+            if not is_tesseract_installed or not is_poppler_installed:
+                instructions = InvoiceParser.get_dependency_installation_instructions()
+                error_message = []
+                if not is_tesseract_installed:
+                    error_message.append("Tesseract OCR is not installed or not in your PATH.")
+                if not is_poppler_installed:
+                    error_message.append("Poppler is not installed or not in your PATH.")
+                
+                return Response({
+                    "error": " ".join(error_message) + " Please install the required dependencies.",
+                    "installation_instructions": instructions
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Get files from request
+            files = request.FILES.getlist('files')
+            
+            if not files:
+                return Response(
+                    {"error": "No files provided"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if len(files) > 20:
+                return Response(
+                    {"error": "Maximum 20 files allowed per batch"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            results = []
+            business_account = None
+            if hasattr(request.user, 'owned_business'):
+                business_account = request.user.owned_business
+            
+            # Process each file
+            for invoice_file in files:
+                try:
+                    # Parse the invoice
+                    extracted_data = InvoiceParser.parse_invoice(invoice_file)
+                    
+                    # Try to find supplier if business account exists
+                    if business_account:
+                        supplier_info = extracted_data.get('supplier_info', {}) or {}
+                        supplier_ice = supplier_info.get('ice')
+                        supplier_name = str(supplier_ice).strip() if supplier_ice else ''
+                        
+                        suppliers = Supplier.objects.filter(
+                            business_account=business_account,
+                            ice_number=supplier_name
+                        )
+                        if suppliers.exists():
+                            extracted_data['supplier_id'] = suppliers.first().id
+                    
+                    results.append({
+                        "success": True,
+                        "filename": invoice_file.name,
+                        "data": extracted_data
+                    })
+                    
+                except ValueError as e:
+                    results.append({
+                        "success": False,
+                        "filename": invoice_file.name,
+                        "error": str(e)
+                    })
+                except Exception as e:
+                    logger.error(f"Error parsing file {invoice_file.name}: {str(e)}\n{traceback.format_exc()}")
+                    results.append({
+                        "success": False,
+                        "filename": invoice_file.name,
+                        "error": f"Failed to parse invoice: {str(e)}"
+                    })
+            
+            return Response(results, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Batch parse error: {str(e)}\n{traceback.format_exc()}")
+            return Response(
+                {"error": f"Failed to process batch: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @swagger_auto_schema(
+        operation_summary="Batch create expenditure invoices",
+        operation_description="Create multiple expenditure invoices from array of invoice data",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['invoices'],
+            properties={
+                'invoices': openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(type=openapi.TYPE_OBJECT),
+                    description='Array of invoice data objects'
+                ),
+            }
+        ),
+        responses={
+            207: openapi.Response(description="Multi-Status - Array with success/error status for each invoice"),
+            400: openapi.Response(description="Invalid request"),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='batch-create-expenditure-invoices')
+    def batch_create_expenditure_invoices(self, request):
+        """
+        Create multiple expenditure invoices from array of invoice data
+        Returns HTTP 207 Multi-Status with individual results for each invoice
+        """
+        try:
+            invoices_data = request.data.get('invoices', [])
+            
+            if not invoices_data:
+                return Response(
+                    {"error": "No invoices data provided"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not isinstance(invoices_data, list):
+                return Response(
+                    {"error": "Invoices data must be an array"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            results = []
+            
+            # Process each invoice
+            for idx, invoice_data in enumerate(invoices_data):
+                try:
+                    # Add business account if user has one
+                    if hasattr(request.user, 'owned_business'):
+                        invoice_data['business_account'] = request.user.owned_business.id
+                    
+                    # Ensure invoice_type is set
+                    if 'invoice_type' not in invoice_data:
+                        invoice_data['invoice_type'] = 'purchase'
+                    
+                    # Create the invoice
+                    serializer = InvoiceSerializer(data=invoice_data, context={'request': request})
+                    
+                    if serializer.is_valid():
+                        invoice = serializer.save()
+                        results.append({
+                            "success": True,
+                            "invoice_id": invoice.id,
+                            "invoice_number": invoice.invoice_number_ref,
+                            "data": InvoiceSerializer(invoice).data
+                        })
+                    else:
+                        results.append({
+                            "success": False,
+                            "index": idx,
+                            "errors": serializer.errors
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error creating invoice at index {idx}: {str(e)}\n{traceback.format_exc()}")
+                    results.append({
+                        "success": False,
+                        "index": idx,
+                        "error": str(e)
+                    })
+            
+            # Return 207 Multi-Status
+            return Response(results, status=status.HTTP_207_MULTI_STATUS)
+            
+        except Exception as e:
+            logger.error(f"Batch create error: {str(e)}\n{traceback.format_exc()}")
+            return Response(
+                {"error": f"Failed to process batch: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     # This method is no longer needed as we're using the InvoiceParser class
     # Keeping it here commented out for reference
     # def _extract_invoice_data(self, text):
