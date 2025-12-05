@@ -303,45 +303,73 @@ class Invoice(BaseModel):
         return f"{self.invoice_number} - {self.get_invoice_type_display()}"
     
     def save(self, *args, **kwargs):
-        """Override save to auto-generate invoice number"""
-        # Only generate number if it's a new invoice without a number
+        """Override save to auto-generate invoice number for outgoing invoices only"""
+        # Only auto-generate number for outgoing invoices (sale, credit_note)
+        # For purchase (expenditure) invoices, use the invoice_number_ref from the uploaded document
         if not self.invoice_number:
-            # Get the current year and month for the prefix
-            from datetime import datetime
-            current_year = datetime.now().year
-            current_month = datetime.now().month
-            
-            # Define prefix based on invoice type
+            # For purchase invoices, use the reference number if available
             if self.invoice_type == 'purchase':
-                prefix = f"ACH-{current_year}{current_month:02d}"
-            elif self.invoice_type == 'sale':
-                prefix = f"VENTE-{current_year}{current_month:02d}"
-            elif self.invoice_type == 'credit_note':
-                prefix = f"AV-{current_year}{current_month:02d}"
-            else:  # invoice or default
-                prefix = f"FAC-{current_year}{current_month:02d}"
-            
-            # Get the max number for this business account, invoice type and period
-            max_invoice = Invoice.objects.filter(
-                business_account=self.business_account,
-                invoice_type=self.invoice_type,
-                invoice_number__startswith=prefix
-            ).order_by('-invoice_number').first()
-            
-            if max_invoice:
-                # Extract the sequence number from the last invoice
-                try:
-                    last_sequence = int(max_invoice.invoice_number.split('-')[-1])
-                    new_sequence = last_sequence + 1
-                except (ValueError, IndexError):
-                    # If parsing fails, start from 1
-                    new_sequence = 1
+                # Use reference (from uploaded document) or generate a fallback
+                if self.reference:
+                    self.invoice_number = self.reference
+                else:
+                    # Fallback: generate a number if no reference provided
+                    from datetime import datetime
+                    current_year = datetime.now().year
+                    current_month = datetime.now().month
+                    prefix = f"ACH-{current_year}{current_month:02d}"
+                    
+                    max_invoice = Invoice.objects.filter(
+                        business_account=self.business_account,
+                        invoice_type=self.invoice_type,
+                        invoice_number__startswith=prefix
+                    ).order_by('-invoice_number').first()
+                    
+                    if max_invoice:
+                        try:
+                            last_sequence = int(max_invoice.invoice_number.split('-')[-1])
+                            new_sequence = last_sequence + 1
+                        except (ValueError, IndexError):
+                            new_sequence = 1
+                    else:
+                        new_sequence = 1
+                    
+                    self.invoice_number = f"{prefix}-{new_sequence:04d}"
             else:
-                # First invoice of this type for this period
-                new_sequence = 1
-            
-            # Generate the new invoice number with zero-padding (4 digits)
-            self.invoice_number = f"{prefix}-{new_sequence:04d}"
+                # For outgoing invoices (sale, credit_note, invoice), auto-generate
+                from datetime import datetime
+                current_year = datetime.now().year
+                current_month = datetime.now().month
+                
+                # Define prefix based on invoice type
+                if self.invoice_type == 'sale':
+                    prefix = f"VENTE-{current_year}{current_month:02d}"
+                elif self.invoice_type == 'credit_note':
+                    prefix = f"AV-{current_year}{current_month:02d}"
+                else:  # invoice or default
+                    prefix = f"FAC-{current_year}{current_month:02d}"
+                
+                # Get the max number for this business account, invoice type and period
+                max_invoice = Invoice.objects.filter(
+                    business_account=self.business_account,
+                    invoice_type=self.invoice_type,
+                    invoice_number__startswith=prefix
+                ).order_by('-invoice_number').first()
+                
+                if max_invoice:
+                    # Extract the sequence number from the last invoice
+                    try:
+                        last_sequence = int(max_invoice.invoice_number.split('-')[-1])
+                        new_sequence = last_sequence + 1
+                    except (ValueError, IndexError):
+                        # If parsing fails, start from 1
+                        new_sequence = 1
+                else:
+                    # First invoice of this type for this period
+                    new_sequence = 1
+                
+                # Generate the new invoice number with zero-padding (4 digits)
+                self.invoice_number = f"{prefix}-{new_sequence:04d}"
         
         # Auto-calculate payment status based on payment state and due date
         # Only auto-update status if not manually set to 'cancelled'
