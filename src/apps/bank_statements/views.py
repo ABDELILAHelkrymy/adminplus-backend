@@ -20,6 +20,7 @@ from .serializers import (
     TransactionCategorySerializer
 )
 from .statement_parser import StatementParser
+from .utils import TransactionMapper
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,9 @@ class BankStatementViewSet(viewsets.ModelViewSet):
             # because the frontend extracts it from the parse response
             stmt = statement_data
             
+            # Initialize transaction mapper for standardized data handling
+            mapper = TransactionMapper()
+            
             # Determine file type
             file_type = None
             if 'file' in request.FILES:
@@ -214,37 +218,32 @@ class BankStatementViewSet(viewsets.ModelViewSet):
                 bank_statement.original_file = request.FILES['file']
                 bank_statement.save()
             
-            # Create transactions
-            transactions = stmt.get('transactions', [])
+            # Create transactions using the mapper for standardization
+            raw_transactions = stmt.get('transactions', [])
             created_transactions = []
             
-            for trans_data in transactions:
+            for raw_tx in raw_transactions:
                 try:
-                    # Parse time if present
-                    time_value = None
-                    if trans_data.get('time'):
-                        try:
-                            time_value = datetime.strptime(trans_data['time'], '%H:%M:%S').time()
-                        except:
-                            pass
-                    
-                    # Handle field name mapping: transaction_date -> operation_date
-                    operation_date = trans_data.get('operation_date') or trans_data.get('transaction_date')
+                    # Normalize transaction data using the mapper
+                    normalized = mapper.normalize_transaction(raw_tx)
                     
                     transaction = BankTransaction.objects.create(
                         bank_statement=bank_statement,
-                        operation_date=operation_date,
-                        value_date=trans_data.get('value_date'),
-                        reference=trans_data.get('reference'),
-                        description=trans_data.get('description', ''),
-                        debit=Decimal(str(trans_data.get('debit', 0))),
-                        credit=Decimal(str(trans_data.get('credit', 0))),
-                        category=trans_data.get('category', 'OTHER'),
-                        merchant=trans_data.get('merchant'),
-                        location=trans_data.get('location'),
-                        beneficiary=trans_data.get('beneficiary'),
-                        depositor=trans_data.get('depositor'),
-                        time=time_value,
+                        operation_date=normalized['operation_date'],
+                        value_date=normalized['value_date'],
+                        reference=normalized['reference'],
+                        description=normalized['description'],
+                        debit=normalized['debit'],
+                        credit=normalized['credit'],
+                        category=normalized['category'],
+                        merchant=normalized['merchant'],
+                        location=normalized['location'],
+                        beneficiary=normalized['beneficiary'],
+                        depositor=normalized['depositor'],
+                        counterparty_name=normalized['counterparty_name'],
+                        counterparty_account=normalized['counterparty_account'],
+                        time=normalized['time'],
+                        payment_method=normalized['payment_method'],
                     )
                     created_transactions.append(transaction)
                 except Exception as e:

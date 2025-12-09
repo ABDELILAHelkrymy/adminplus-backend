@@ -5,6 +5,8 @@ from typing import Dict, Any
 from openai import OpenAI
 from django.conf import settings
 
+from .utils import TransactionMapper
+
 logger = logging.getLogger(__name__)
 
 
@@ -171,7 +173,7 @@ Bank Statement Content:
             raise ValueError("GPT returned invalid JSON")
 
     def _post_process(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize and convert numerical values to Decimal"""
+        """Normalize and convert numerical values using TransactionMapper"""
         def parse_decimal(val):
             try:
                 if val is None or val == '':
@@ -197,20 +199,25 @@ Bank Statement Content:
         if 'closing_balance' in statement:
             statement['closing_balance'] = parse_decimal(statement['closing_balance'])
         
-        # Process transactions
-        transactions = statement.get('transactions', [])
-        for transaction in transactions:
-            transaction['debit'] = parse_decimal(transaction.get('debit', 0)) or Decimal('0.00')
-            transaction['credit'] = parse_decimal(transaction.get('credit', 0)) or Decimal('0.00')
-            
-            # Ensure category is valid
-            valid_categories = [
-                'BANK_FEE', 'ATM_WITHDRAWAL', 'BILL_PAYMENT', 'LOAN_REPAYMENT',
-                'TAX', 'TRANSFER_OUT', 'TRANSFER_IN', 'CASH_DEPOSIT',
-                'CARD_PAYMENT', 'CHECK_PAYMENT', 'SALARY', 'INTEREST', 'OTHER'
-            ]
-            if transaction.get('category') not in valid_categories:
-                transaction['category'] = 'OTHER'
+        # Use TransactionMapper to normalize transactions
+        mapper = TransactionMapper()
+        raw_transactions = statement.get('transactions', [])
+        normalized_transactions = []
+        
+        for raw_tx in raw_transactions:
+            try:
+                normalized = mapper.normalize_transaction(raw_tx)
+                normalized_transactions.append(normalized)
+            except Exception as e:
+                logger.warning(f"Failed to normalize transaction in GPT parser: {str(e)}")
+                # Fallback: keep raw transaction with basic processing
+                raw_tx['debit'] = parse_decimal(raw_tx.get('debit', 0)) or Decimal('0.00')
+                raw_tx['credit'] = parse_decimal(raw_tx.get('credit', 0)) or Decimal('0.00')
+                if raw_tx.get('category') not in mapper.VALID_CATEGORIES:
+                    raw_tx['category'] = 'OTHER'
+                normalized_transactions.append(raw_tx)
+        
+        statement['transactions'] = normalized_transactions
         
         return data
     
