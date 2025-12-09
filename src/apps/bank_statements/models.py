@@ -8,6 +8,23 @@ from apps.accounts.models import BusinessAccount
 from apps.users.models import User
 
 
+# Moroccan banks list
+MOROCCAN_BANKS = [
+    ('ATTIJARIWAFA_BANK', 'ATTIJARIWAFA BANK'),
+    ('BANQUE_CENTRALE_POPULAIRE', 'BANQUE CENTRALE POPULAIRE'),
+    ('BANK_OF_AFRICA', 'BANK OF AFRICA'),
+    ('BMCI', 'BANQUE MAROCAINE POUR LE COMMERCE ET L\'INDUSTRIE'),
+    ('CREDIT_AGRICOLE', 'CREDIT AGRICOLE DU MAROC'),
+    ('CIH_BANK', 'CREDIT IMMOBILIER ET HOTELIER'),
+    ('CREDIT_DU_MAROC', 'CREDIT DU MAROC'),
+    ('SOCIETE_GENERALE', 'SOCIETE GENERALE MAROC'),
+    ('AL_BARID_BANK', 'AL BARID BANK'),
+    ('CFG_BANK', 'CFG BANK'),
+    ('UMNIA_BANK', 'UMNIA BANK'),
+    ('OTHER', 'Autre'),
+]
+
+
 # Helper functions for file paths
 def statement_document_path(instance, filename):
     """Generate path for bank statement documents by business account"""
@@ -24,7 +41,13 @@ class BankStatement(BaseModel):
     
     # Statement metadata
     account_holder = models.CharField(max_length=255, null=True, blank=True)
-    bank_name = models.CharField(max_length=255, null=True, blank=True)
+    bank_name = models.CharField(
+        max_length=255, 
+        choices=MOROCCAN_BANKS,
+        null=True, 
+        blank=True,
+        help_text="Select the Moroccan bank"
+    )
     account_number = models.CharField(max_length=100, null=True, blank=True)
     iban = models.CharField(max_length=34, null=True, blank=True)
     branch = models.CharField(max_length=255, null=True, blank=True)

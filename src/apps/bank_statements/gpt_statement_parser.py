@@ -50,6 +50,8 @@ class GPTStatementParser:
                         6. Identify merchants, locations, and beneficiaries
                         7. Be precise with dates (YYYY-MM-DD format)
                         8. For amounts, debit should be positive, credit should be positive
+                        9. ALWAYS extract the bank name from the header/logo (in French or Arabic)
+                        10. For Moroccan banks, detect currency as MAD (may appear as DH, Dirham, or MAD)
                         """
                     },
                     {
@@ -85,11 +87,13 @@ Extract all information from this bank statement and return ONLY a JSON object w
   "statement": {{
     "account_holder": "string or null",
     "account_number": "string or null",
+    "bank_name": "string or null",
     "branch": "string or null",
     "period_start": "YYYY-MM-DD or null",
     "period_end": "YYYY-MM-DD or null",
     "opening_balance": number or null,
     "closing_balance": number or null,
+    "currency": "MAD|EUR|USD|GBP or null (detect from statement, default MAD for Morocco)",
     "transactions": [
       {{
         "operation_date": "YYYY-MM-DD",
@@ -132,7 +136,14 @@ Important Rules:
 5. Extract merchant names, locations from descriptions when possible
 6. For transfers, identify beneficiary/depositor names
 7. Extract time if visible in format HH:MM:SS
-8. Return ONLY the JSON object, no extra text or markdown
+8. **CRITICAL**: Always extract bank_name from the document header/logo/top of page:
+   - Look for: BANQUE POPULAIRE, Attijariwafa Bank, BMCE, BMCI, CIH Bank, Crédit Agricole, 
+     Société Générale, CDM, Al Barid Bank, Bank of Africa, CFG Bank, Umnia Bank, etc.
+   - Bank name may appear in French, Arabic (البنك الشعبي, بنك المغرب, etc.), or both
+   - Extract the French name when available
+9. **CRITICAL**: Detect currency from statement (look for MAD, DH, Dirham, درهم, EUR, €, USD, $, etc.)
+   - Default to MAD for Moroccan banks (BANQUE POPULAIRE, Attijariwafa, BMCE, CIH, etc.)
+10. Return ONLY the JSON object, no extra text or markdown
 
 Bank Statement Content:
 {text}
@@ -171,6 +182,15 @@ Bank Statement Content:
 
         statement = data.get('statement', {})
         
+        # Normalize bank_name to match predefined list
+        detected_bank = statement.get('bank_name', '').upper() if statement.get('bank_name') else ''
+        statement['bank_name'] = self._normalize_bank_name(detected_bank)
+        
+        # Ensure currency is populated (default MAD for Morocco)
+        if not statement.get('currency'):
+            statement['currency'] = 'MAD'
+            logger.info("Currency not detected, defaulting to MAD")
+        
         # Process balance values
         if 'opening_balance' in statement:
             statement['opening_balance'] = parse_decimal(statement['opening_balance'])
@@ -193,3 +213,74 @@ Bank Statement Content:
                 transaction['category'] = 'OTHER'
         
         return data
+    
+    def _normalize_bank_name(self, detected_name: str) -> str:
+        """
+        Normalize detected bank name to match predefined list
+        
+        Args:
+            detected_name: Bank name detected by GPT (may be in various formats)
+            
+        Returns:
+            str: Normalized bank code from MOROCCAN_BANKS list
+        """
+        if not detected_name:
+            return None
+            
+        # Remove extra spaces and convert to uppercase
+        detected_name = ' '.join(detected_name.split()).upper()
+        
+        # Bank name mapping with various patterns
+        bank_patterns = {
+            'ATTIJARIWAFA_BANK': [
+                'ATTIJARIWAFA', 'ATTIJARI', 'WAFA', 'AWB',
+                'التجاري وفا', 'التجاري', 'وفا بنك'
+            ],
+            'BANQUE_CENTRALE_POPULAIRE': [
+                'BANQUE POPULAIRE', 'POPULAIRE', 'BCP', 'BP',
+                'البنك الشعبي', 'الشعبي', 'CENTRALE POPULAIRE'
+            ],
+            'BANK_OF_AFRICA': [
+                'BANK OF AFRICA', 'BOA', 'BMCE', 'BMCE BANK',
+                'بنك افريقيا', 'بنك المغرب للتجارة'
+            ],
+            'BMCI': [
+                'BMCI', 'BANQUE MAROCAINE', 'COMMERCE ET INDUSTRIE',
+                'MAROCAINE POUR LE COMMERCE'
+            ],
+            'CREDIT_AGRICOLE': [
+                'CREDIT AGRICOLE', 'CAM', 'AGRICOLE DU MAROC',
+                'القرض الفلاحي'
+            ],
+            'CIH_BANK': [
+                'CIH', 'CREDIT IMMOBILIER', 'IMMOBILIER ET HOTELIER',
+                'القرض العقاري'
+            ],
+            'CREDIT_DU_MAROC': [
+                'CREDIT DU MAROC', 'CDM', 'CRÉDIT DU MAROC'
+            ],
+            'SOCIETE_GENERALE': [
+                'SOCIETE GENERALE', 'SG MAROC', 'SGMA', 'SG'
+            ],
+            'AL_BARID_BANK': [
+                'BARID BANK', 'AL BARID', 'BARIDBANK',
+                'بريد بنك', 'البريد بنك'
+            ],
+            'CFG_BANK': [
+                'CFG', 'CFG BANK'
+            ],
+            'UMNIA_BANK': [
+                'UMNIA', 'UMNIA BANK'
+            ],
+        }
+        
+        # Try to match detected name with patterns
+        for bank_code, patterns in bank_patterns.items():
+            for pattern in patterns:
+                if pattern in detected_name or detected_name in pattern:
+                    logger.info(f"Matched bank: {detected_name} -> {bank_code}")
+                    return bank_code
+        
+        # If no match found, log warning and return OTHER
+        logger.warning(f"Could not match bank name: {detected_name}, defaulting to OTHER")
+        return 'OTHER'

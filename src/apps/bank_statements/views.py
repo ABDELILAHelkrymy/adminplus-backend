@@ -12,7 +12,7 @@ from decimal import Decimal
 from datetime import datetime
 
 from apps.accounts.models import BusinessAccount
-from .models import BankStatement, BankTransaction, TransactionCategory
+from .models import BankStatement, BankTransaction, TransactionCategory, MOROCCAN_BANKS
 from .serializers import (
     BankStatementSerializer,
     BankStatementDetailSerializer,
@@ -61,6 +61,19 @@ class BankStatementViewSet(viewsets.ModelViewSet):
                 {"error": "User does not have a business account"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+    @swagger_auto_schema(
+        operation_summary="Get list of Moroccan banks",
+        operation_description="Returns the list of available Moroccan banks for selection",
+        responses={200: openapi.Response(description="List of banks")},
+    )
+    @action(detail=False, methods=['get'])
+    def moroccan_banks(self, request):
+        """
+        Get list of Moroccan banks
+        """
+        banks = [{'code': code, 'name': name} for code, name in MOROCCAN_BANKS]
+        return Response(banks, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
         operation_summary="Parse bank statement file",
