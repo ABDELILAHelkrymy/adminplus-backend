@@ -167,6 +167,14 @@ class BankTransaction(BaseModel):
         blank=True, 
         related_name='bank_transactions'
     )
+    reconciled_at = models.DateTimeField(null=True, blank=True)
+    reconciled_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reconciled_transactions'
+    )
     
     # Flags
     is_duplicate = models.BooleanField(default=False)

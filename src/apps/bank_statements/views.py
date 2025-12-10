@@ -336,6 +336,253 @@ class BankTransactionViewSet(viewsets.ModelViewSet):
         transaction.save()
         return Response({"status": "Transaction marked as duplicate"}, status=status.HTTP_200_OK)
 
+    @swagger_auto_schema(
+        operation_summary="Get suggested invoice matches for a transaction",
+        operation_description="Find invoices that potentially match this bank transaction based on amount, date, and description analysis",
+        responses={
+            200: openapi.Response(
+                description="List of suggested invoice matches",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'matches': openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    'invoice_id': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'invoice_number': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'invoice_type': openapi.Schema(type=openapi.TYPE_STRING, enum=['customer', 'supplier']),
+                                    'total': openapi.Schema(type=openapi.TYPE_NUMBER),
+                                    'due_date': openapi.Schema(type=openapi.TYPE_STRING, format='date'),
+                                    'party_name': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'score': openapi.Schema(type=openapi.TYPE_INTEGER, description='Match score 0-100'),
+                                    'confidence_level': openapi.Schema(type=openapi.TYPE_STRING, enum=['high', 'medium', 'low']),
+                                    'reasons': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_STRING)),
+                                }
+                            )
+                        ),
+                        'transaction': openapi.Schema(type=openapi.TYPE_OBJECT, description='Transaction details'),
+                    }
+                )
+            ),
+            404: openapi.Response(description="Transaction not found"),
+        },
+    )
+    @action(detail=True, methods=['get'])
+    def suggested_matches(self, request, pk=None):
+        """
+        Get suggested invoice matches for a transaction.
+        Uses intelligent matching based on:
+        - Amount matching (exact or close)
+        - Date proximity
+        - Reference/invoice number matching
+        - Counterparty name matching
+        """
+        from .services import InvoiceMatcher, MATCH_REASON_LABELS
+        
+        transaction = self.get_object()
+        
+        # Get the business account for invoice lookup
+        business_account = transaction.bank_statement.business_account
+        
+        # Initialize matcher and find matches
+        matcher = InvoiceMatcher(business_account)
+        raw_matches = matcher.find_matches(transaction)
+        
+        # Format matches for JSON response
+        formatted_matches = []
+        for match in raw_matches:
+            invoice = match['invoice']
+            # Determine party name based on invoice type
+            if invoice.invoice_type == 'purchase':
+                party_name = invoice.supplier.corporate_name if invoice.supplier else 'Unknown Supplier'
+                invoice_type_display = 'supplier'
+            else:
+                party_name = invoice.customer.corporate_name if invoice.customer else 'Unknown Customer'
+                invoice_type_display = 'customer'
+            
+            formatted_matches.append({
+                'invoice_id': str(invoice.id),
+                'invoice_number': invoice.invoice_number or '-',
+                'invoice_type': invoice_type_display,
+                'total': float(invoice.total) if invoice.total else 0,
+                'due_date': invoice.due_date.isoformat() if invoice.due_date else None,
+                'party_name': party_name,
+                'score': match['score'],
+                'confidence_level': match['confidence'],
+                'reasons': [MATCH_REASON_LABELS.get(r, r) for r in match['reasons']],
+            })
+        
+        # Format transaction info for response
+        transaction_info = {
+            'id': str(transaction.id),
+            'operation_date': transaction.operation_date.isoformat() if transaction.operation_date else None,
+            'description': transaction.description,
+            'debit': float(transaction.debit) if transaction.debit else None,
+            'credit': float(transaction.credit) if transaction.credit else None,
+            'amount': float(transaction.debit or transaction.credit or 0),
+            'is_debit': transaction.debit is not None and transaction.debit > 0,
+            'counterparty_name': transaction.counterparty_name,
+            'reference': transaction.reference,
+            'is_reconciled': transaction.is_reconciled,
+            'matched_invoice_id': str(transaction.matched_invoice.id) if transaction.matched_invoice else None,
+        }
+        
+        return Response({
+            'transaction': transaction_info,
+            'matches': formatted_matches,
+        }, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary="Reconcile transaction with an invoice",
+        operation_description="Link a bank transaction to an invoice and mark the invoice as paid",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['invoice_id'],
+            properties={
+                'invoice_id': openapi.Schema(type=openapi.TYPE_STRING, description='UUID of the invoice to link'),
+                'notes': openapi.Schema(type=openapi.TYPE_STRING, description='Optional notes about the reconciliation'),
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                description="Transaction reconciled successfully",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'transaction_id': openapi.Schema(type=openapi.TYPE_STRING),
+                        'invoice_id': openapi.Schema(type=openapi.TYPE_STRING),
+                        'invoice_status': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            400: openapi.Response(description="Bad request"),
+            404: openapi.Response(description="Transaction or invoice not found"),
+        },
+    )
+    @action(detail=True, methods=['post'])
+    def reconcile_with_invoice(self, request, pk=None):
+        """
+        Reconcile a transaction with an invoice.
+        This will:
+        1. Link the transaction to the invoice
+        2. Mark the transaction as reconciled
+        3. Update the invoice status to 'paid'
+        4. Set the invoice paid_date
+        """
+        from .services import InvoiceMatcher
+        from apps.invoices.models import Invoice
+        
+        transaction = self.get_object()
+        invoice_id = request.data.get('invoice_id')
+        notes = request.data.get('notes', '')
+        
+        if not invoice_id:
+            return Response(
+                {"error": "invoice_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get the invoice
+        try:
+            invoice = Invoice.objects.get(id=invoice_id)
+        except Invoice.DoesNotExist:
+            return Response(
+                {"error": "Invoice not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify the invoice belongs to the same business account
+        business_account = transaction.bank_statement.business_account
+        if invoice.business_account != business_account:
+            return Response(
+                {"error": "Invoice does not belong to the same business account"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if already reconciled with a different invoice
+        if transaction.matched_invoice and transaction.matched_invoice.id != invoice.id:
+            return Response(
+                {"error": "Transaction is already reconciled with a different invoice"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Perform reconciliation using the matcher service
+        matcher = InvoiceMatcher(business_account)
+        try:
+            result = matcher.reconcile_transaction_with_invoice(
+                transaction=transaction,
+                invoice=invoice,
+                user=request.user
+            )
+            
+            return Response({
+                'status': 'Transaction reconciled successfully',
+                'transaction_id': str(transaction.id),
+                'invoice_id': str(invoice.id),
+                'invoice_number': invoice.invoice_number,
+                'invoice_status': invoice.status,
+                'reconciled_at': result.get('reconciled_at'),
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Reconciliation error: {str(e)}\n{traceback.format_exc()}")
+            return Response(
+                {"error": f"Failed to reconcile: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @swagger_auto_schema(
+        operation_summary="Unreconcile a transaction",
+        operation_description="Remove the link between a transaction and its matched invoice",
+        responses={
+            200: openapi.Response(description="Transaction unreconciled successfully"),
+            400: openapi.Response(description="Transaction is not reconciled"),
+        },
+    )
+    @action(detail=True, methods=['post'])
+    def unreconcile(self, request, pk=None):
+        """
+        Remove reconciliation from a transaction.
+        This will also reset the invoice status back to unpaid.
+        """
+        from .services import InvoiceMatcher
+        
+        transaction = self.get_object()
+        
+        if not transaction.is_reconciled and not transaction.matched_invoice:
+            return Response(
+                {"error": "Transaction is not reconciled"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Store previous invoice info for response
+        previous_invoice_id = str(transaction.matched_invoice.id) if transaction.matched_invoice else None
+        previous_invoice_number = transaction.matched_invoice.invoice_number if transaction.matched_invoice else None
+        
+        # Use the InvoiceMatcher service to properly unreconcile
+        business_account = transaction.bank_statement.business_account
+        matcher = InvoiceMatcher(business_account)
+        
+        try:
+            result = matcher.unreconcile_transaction(transaction, request.user)
+            
+            return Response({
+                'status': 'Transaction unreconciled successfully',
+                'transaction_id': str(transaction.id),
+                'previous_invoice_id': previous_invoice_id,
+                'previous_invoice_number': previous_invoice_number,
+                'invoice_status_reset': True,
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Unreconcile error: {str(e)}\n{traceback.format_exc()}")
+            return Response(
+                {"error": f"Failed to unreconcile: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 class TransactionCategoryViewSet(viewsets.ModelViewSet):
     """

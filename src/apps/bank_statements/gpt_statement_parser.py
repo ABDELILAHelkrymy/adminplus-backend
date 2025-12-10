@@ -145,7 +145,15 @@ Important Rules:
    - Extract the French name when available
 9. **CRITICAL**: Detect currency from statement (look for MAD, DH, Dirham, درهم, EUR, €, USD, $, etc.)
    - Default to MAD for Moroccan banks (BANQUE POPULAIRE, Attijariwafa, BMCE, CIH, etc.)
-10. Return ONLY the JSON object, no extra text or markdown
+10. **CRITICAL**: Always extract the account_number (numéro de compte, N° compte, رقم الحساب):
+   - Look for patterns like: 007 123 456 789 00 24, RIB, account number, N° compte
+   - It's usually a 24-digit number for Moroccan banks (RIB format)
+   - May appear as: "Compte: XXXXX" or "N° Compte: XXXXX" or "Account Number: XXXXX"
+   - Remove spaces/dashes and extract the full number
+11. **CRITICAL**: Extract account_holder (titulaire du compte, صاحب الحساب):
+   - Look for client name at the top of the statement
+   - May appear as "Client:", "Titulaire:", or near the address
+12. Return ONLY the JSON object, no extra text or markdown
 
 Bank Statement Content:
 {text}
