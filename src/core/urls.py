@@ -18,8 +18,6 @@ schema_view = get_schema_view(
    ),
    public=True,
    permission_classes=(permissions.AllowAny,),
-   # Removed patterns parameter to avoid double-loading URLs which causes
-   # "Converter 'drf_format_suffix' is already registered" error
 )
 
 

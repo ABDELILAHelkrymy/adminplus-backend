@@ -1,7 +1,7 @@
 Django
 gunicorn
 python-decouple==3.8
-djangorestframework==3.14.0
+djangorestframework>=3.15.0
 djangorestframework-simplejwt
 pillow
 drf-yasg
