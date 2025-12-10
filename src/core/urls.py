@@ -18,7 +18,8 @@ schema_view = get_schema_view(
    ),
    public=True,
    permission_classes=(permissions.AllowAny,),
-   patterns=[path('api/', include('api.urls'))],  # Include only API URLs in the schema
+   # Removed patterns parameter to avoid double-loading URLs which causes
+   # "Converter 'drf_format_suffix' is already registered" error
 )
 
 
