@@ -3,7 +3,7 @@ URL patterns for Accounting Export API
 """
 
 from django.urls import path
-from .views import AccountingExportView, AccountMappingView
+from .views import AccountingExportView, AccountMappingView, DashboardStatsView
 
 urlpatterns = [
     # Accounting Export endpoints
@@ -19,4 +19,12 @@ urlpatterns = [
         AccountMappingView.as_view(),
         name='account-mappings'
     ),
+
+    # Dashboard endpoint
+    path(
+        'dashboard/stats/',
+        DashboardStatsView.as_view(),
+        name='dashboard-stats'
+    ),
 ]
+
