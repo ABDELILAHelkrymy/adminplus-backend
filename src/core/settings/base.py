@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'apps.common',
     'apps.invoices',
     'apps.bank_statements',
+    'apps.accounting',
 ]
 
 # Configure DRF to use JWT for authentication
