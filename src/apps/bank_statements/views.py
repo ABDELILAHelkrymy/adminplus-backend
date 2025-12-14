@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.http import HttpResponse
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,6 +9,8 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 import logging
 import traceback
+import csv
+import io
 from decimal import Decimal
 from datetime import datetime
 
@@ -582,6 +585,234 @@ class BankTransactionViewSet(viewsets.ModelViewSet):
                 {"error": f"Failed to unreconcile: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @swagger_auto_schema(
+        operation_summary="Export bank transactions",
+        operation_description="Export bank transactions to CSV or Excel format for accountants",
+        manual_parameters=[
+            openapi.Parameter(
+                'format', openapi.IN_QUERY,
+                description="Export format: csv or xlsx",
+                type=openapi.TYPE_STRING,
+                enum=['csv', 'xlsx'],
+                default='csv'
+            ),
+            openapi.Parameter(
+                'start_date', openapi.IN_QUERY,
+                description="Filter transactions from this date (YYYY-MM-DD)",
+                type=openapi.TYPE_STRING,
+                format='date'
+            ),
+            openapi.Parameter(
+                'end_date', openapi.IN_QUERY,
+                description="Filter transactions up to this date (YYYY-MM-DD)",
+                type=openapi.TYPE_STRING,
+                format='date'
+            ),
+            openapi.Parameter(
+                'statement_id', openapi.IN_QUERY,
+                description="Filter by specific bank statement",
+                type=openapi.TYPE_STRING
+            ),
+            openapi.Parameter(
+                'reconciled_only', openapi.IN_QUERY,
+                description="Export only reconciled transactions (linked to invoices)",
+                type=openapi.TYPE_BOOLEAN,
+                default=False
+            ),
+        ],
+        responses={
+            200: openapi.Response(description="File download"),
+            400: openapi.Response(description="Bad request"),
+        },
+    )
+    @action(detail=False, methods=['get'], url_path='export', url_name='export')
+    def export(self, request):
+        """
+        Export bank transactions to CSV or Excel format.
+        Columns: Date Opération, Date Valeur, Description, Référence, Contrepartie,
+                 Débit, Crédit, Solde, Catégorie, Rapproché, N° Facture
+        """
+        # Get parameters
+        export_format = request.query_params.get('format', 'csv').lower()
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+        statement_id = request.query_params.get('statement_id')
+        reconciled_only = request.query_params.get('reconciled_only', 'false').lower() in ('true', '1', 'yes')
+        
+        # Get base queryset
+        queryset = self.get_queryset()
+        
+        # Apply filters
+        if start_date:
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d').date()
+                queryset = queryset.filter(operation_date__gte=start)
+            except ValueError:
+                return Response(
+                    {"error": "Invalid start_date format. Use YYYY-MM-DD"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        if end_date:
+            try:
+                end = datetime.strptime(end_date, '%Y-%m-%d').date()
+                queryset = queryset.filter(operation_date__lte=end)
+            except ValueError:
+                return Response(
+                    {"error": "Invalid end_date format. Use YYYY-MM-DD"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        if statement_id:
+            queryset = queryset.filter(bank_statement_id=statement_id)
+        
+        if reconciled_only:
+            queryset = queryset.filter(is_reconciled=True, matched_invoice__isnull=False)
+        
+        # Order by operation date
+        queryset = queryset.order_by('operation_date', 'created_at')
+        
+        # Prepare data
+        transactions = list(queryset.select_related('matched_invoice'))
+        
+        # Column headers (French for accountants)
+        headers = [
+            'Date Opération',
+            'Date Valeur',
+            'Description',
+            'Référence',
+            'Contrepartie',
+            'Débit',
+            'Crédit',
+            'Solde',
+            'Catégorie',
+            'Rapproché',
+            'N° Facture'
+        ]
+        
+        # Format date for export (DD/MM/YYYY - French format)
+        def format_date(date_val):
+            if date_val:
+                return date_val.strftime('%d/%m/%Y')
+            return ''
+        
+        # Format decimal for export
+        def format_decimal(val):
+            if val is not None and val > 0:
+                return str(val).replace('.', ',')  # French decimal separator
+            return ''
+        
+        # Build rows
+        rows = []
+        for tx in transactions:
+            row = [
+                format_date(tx.operation_date),
+                format_date(tx.value_date),
+                tx.description or '',
+                tx.reference or '',
+                tx.counterparty_name or '',
+                format_decimal(tx.debit),
+                format_decimal(tx.credit),
+                format_decimal(tx.balance_after) if tx.balance_after else '',
+                tx.category or '',
+                'Oui' if tx.is_reconciled else 'Non',
+                tx.matched_invoice.invoice_number if tx.matched_invoice else '',
+            ]
+            rows.append(row)
+        
+        # Generate filename
+        business_name = 'export'
+        if hasattr(request.user, 'owned_business') and request.user.owned_business:
+            business_name = request.user.owned_business.name or 'export'
+        business_name = business_name.replace(' ', '_')
+        
+        date_suffix = datetime.now().strftime('%Y%m%d')
+        
+        if export_format == 'xlsx':
+            # Excel export
+            try:
+                from openpyxl import Workbook
+                from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+                from openpyxl.utils import get_column_letter
+            except ImportError:
+                return Response(
+                    {"error": "openpyxl is required for Excel export. Install with: pip install openpyxl"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Mouvements Bancaires"
+            
+            # Header styling
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center")
+            thin_border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            
+            # Write headers
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col_idx, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = thin_border
+            
+            # Write data
+            for row_idx, row in enumerate(rows, 2):
+                for col_idx, value in enumerate(row, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                    cell.border = thin_border
+            
+            # Auto-adjust column widths
+            for col_idx, header in enumerate(headers, 1):
+                max_length = len(header)
+                for row in rows:
+                    cell_value = str(row[col_idx - 1]) if col_idx - 1 < len(row) else ''
+                    max_length = max(max_length, len(cell_value))
+                ws.column_dimensions[get_column_letter(col_idx)].width = min(max_length + 2, 50)
+            
+            # Save to buffer
+            output = io.BytesIO()
+            wb.save(output)
+            output.seek(0)
+            
+            filename = f"mouvements_bancaires_{business_name}_{date_suffix}.xlsx"
+            response = HttpResponse(
+                output.getvalue(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        
+        else:
+            # CSV export (default)
+            output = io.StringIO()
+            writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+            
+            # Write BOM for Excel UTF-8 compatibility
+            output.write('\ufeff')
+            
+            # Write headers
+            writer.writerow(headers)
+            
+            # Write data
+            for row in rows:
+                writer.writerow(row)
+            
+            filename = f"mouvements_bancaires_{business_name}_{date_suffix}.csv"
+            response = HttpResponse(
+                output.getvalue(),
+                content_type='text/csv; charset=utf-8'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
 
 
 class TransactionCategoryViewSet(viewsets.ModelViewSet):
