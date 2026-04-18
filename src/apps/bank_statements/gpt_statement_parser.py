@@ -37,7 +37,7 @@ class GPTStatementParser:
             prompt = self._create_extraction_prompt(text)
             
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo-16k",  # Faster than GPT-4 and handles longer context
+                model="gpt-4o-mini",  # Faster than GPT-4 and handles up to 128k context
                 messages=[
                     {
                         "role": "system",
