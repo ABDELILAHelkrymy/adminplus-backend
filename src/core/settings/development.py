@@ -11,17 +11,20 @@ ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
     'adminplus-backend-production.up.railway.app',
+    'diligent-dream-production.up.railway.app',
     'http://localhost:3000',
     'https://comptago.vercel.app/'
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     'https://adminplus-backend-production.up.railway.app/',
+    'https://diligent-dream-production.up.railway.app/',
     'https://comptago.vercel.app/',
 ]
 
 CORS_ALLOWED_ORIGINS = [
     'https://adminplus-backend-production.up.railway.app',
+    'https://diligent-dream-production.up.railway.app',
     'http://localhost:3000',
     'https://comptago.vercel.app',
 ]

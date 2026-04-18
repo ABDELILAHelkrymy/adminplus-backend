@@ -9,16 +9,19 @@ DEBUG = config('DJANGO_DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = [
     'adminplus-backend-production.up.railway.app',
+    'diligent-dream-production.up.railway.app',
     'comptago.vercel.app'
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     'https://adminplus-backend-production.up.railway.app',
+    'https://diligent-dream-production.up.railway.app',
     'https://comptago.vercel.app',
 ]
 
 CORS_ALLOWED_ORIGINS = [
     'https://adminplus-backend-production.up.railway.app',
+    'https://diligent-dream-production.up.railway.app',
     'https://comptago.vercel.app',
 ]
 
