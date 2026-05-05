@@ -23,4 +23,6 @@ COPY . /app/
 
 EXPOSE 8000
 
-CMD ["python", "src/manage.py", "runserver", "0.0.0.0:8000"]
+ENV DJANGO_SETTINGS_MODULE=core.settings.production
+
+CMD sh -c "cd src && gunicorn core.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3 --timeout 120 --log-file -"
