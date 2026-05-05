@@ -37,7 +37,10 @@ DATABASES = {
 }
 
 # Use PostgreSQL in production
-CONN_MAX_AGE = config('CONN_MAX_AGE', default=600, cast=int)
+# CONN_MAX_AGE=0 is required for Railway: Railway's proxy kills long-lived idle
+# connections, so persistent connections cause 'server closed the connection
+# unexpectedly' errors. Use 0 to open a fresh connection per request.
+CONN_MAX_AGE = config('CONN_MAX_AGE', default=0, cast=int)
 DATABASE_URL = config('DATABASE_URL', default='', cast=str)
 if DATABASE_URL:
     import dj_database_url
@@ -45,6 +48,7 @@ if DATABASE_URL:
         default=DATABASE_URL,
         conn_health_checks=True,
         conn_max_age=CONN_MAX_AGE,
+        ssl_require=True,
     )
 
 # Security settings
