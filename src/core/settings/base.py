@@ -350,14 +350,12 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
 EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
 EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
-DEFAULT_FROM_EMAIL = config('EMAIL_HOST_USER', default='')
-EMAIL_FROM = config('EMAIL_HOST_USER', default='')
+DEFAULT_FROM_EMAIL = config('EMAIL_FROM_ADDRESS', default='onboarding@resend.dev')
+EMAIL_FROM = config('EMAIL_FROM_ADDRESS', default='onboarding@resend.dev')
 
-# For Gmail, needed for App Passwords with 2FA accounts
-EMAIL_USE_SSL = False
-EMAIL_USE_TLS = True
 EMAIL_TIMEOUT = 300  # 5 minutes timeout
 # Disable SSL certificate verification for development
 EMAIL_SSL_CERTFILE = None

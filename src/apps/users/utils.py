@@ -81,10 +81,12 @@ def send_verification_email(user):
         'link': verification_link
     })
     
+    from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+
     try:
         # Set up the email
         msg = MIMEMultipart()
-        msg['From'] = settings.EMAIL_HOST_USER
+        msg['From'] = from_email
         msg['To'] = user.email
         msg['Subject'] = "Verify your email address"
         
@@ -106,34 +108,36 @@ The AdminPlus Accounting Team
         # Connect to the SMTP server with timeout
         email_logger.debug(f"Connecting to SMTP server: {settings.EMAIL_HOST}:{settings.EMAIL_PORT}", extra={
             'to': user.email,
-            'from': settings.EMAIL_HOST_USER,
+            'from': from_email,
             'host': settings.EMAIL_HOST,
             'port': settings.EMAIL_PORT
         })
         
-        # Set timeout for SMTP connection (30 seconds)
-        server = smtplib.SMTP(settings.EMAIL_HOST, settings.EMAIL_PORT, timeout=30)
-        server.set_debuglevel(0)  # Disable debugging output
+        # Use SMTP_SSL for port 465 (Resend), plain SMTP + STARTTLS for port 587 (Gmail)
+        if settings.EMAIL_USE_SSL:
+            server = smtplib.SMTP_SSL(settings.EMAIL_HOST, settings.EMAIL_PORT, timeout=30)
+        else:
+            server = smtplib.SMTP(settings.EMAIL_HOST, settings.EMAIL_PORT, timeout=30)
+            if settings.EMAIL_USE_TLS:
+                email_logger.debug("Starting TLS encryption", extra={
+                    'to': user.email,
+                    'from': from_email
+                })
+                server.starttls()
         
-        # Start TLS encryption if configured
-        if settings.EMAIL_USE_TLS:
-            email_logger.debug("Starting TLS encryption", extra={
-                'to': user.email,
-                'from': settings.EMAIL_HOST_USER
-            })
-            server.starttls()
+        server.set_debuglevel(0)  # Disable debugging output
         
         # Login with credentials
         email_logger.debug(f"Logging in with username: {settings.EMAIL_HOST_USER}", extra={
             'to': user.email,
-            'from': settings.EMAIL_HOST_USER
+            'from': from_email
         })
         server.login(settings.EMAIL_HOST_USER, settings.EMAIL_HOST_PASSWORD)
         
         # Send the email
         email_logger.debug("Sending email", extra={
             'to': user.email,
-            'from': settings.EMAIL_HOST_USER
+            'from': from_email
         })
         server.send_message(msg)
         
@@ -142,7 +146,7 @@ The AdminPlus Accounting Team
         
         email_logger.info(f"Verification email sent successfully to {user.email}", extra={
             'to': user.email,
-            'from': settings.EMAIL_HOST_USER
+            'from': from_email
         })
         return True
         
@@ -176,7 +180,7 @@ The AdminPlus Accounting Team
             send_mail(
                 subject,
                 message,
-                settings.EMAIL_HOST_USER,
+                from_email,
                 [user.email],
                 fail_silently=False,
             )
