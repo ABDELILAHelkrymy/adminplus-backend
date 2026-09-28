@@ -27,7 +27,7 @@ class GPTInvoiceParser:
         try:
             prompt = self._prepare_prompt(text)
             response = self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
