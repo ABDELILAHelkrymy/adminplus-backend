@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Dict, Any
 from openai import OpenAI
@@ -164,6 +165,16 @@ class GPTInvoiceParser:
                 return Decimal(str(val)) if val is not None else None
             except (ValueError, InvalidOperation, TypeError):
                 return None
+
+        for field in ("date", "due_date", "paid_date"):
+            value = data.get(field)
+            if isinstance(value, str):
+                try:
+                    data[field] = datetime.fromisoformat(
+                        value.replace("Z", "+00:00")
+                    ).date().isoformat()
+                except ValueError:
+                    pass
 
         # Process monetary values
         data["subtotal"] = parse_decimal(data.get("subtotal"))
